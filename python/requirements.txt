@@ -1,9 +1,22 @@
-# PS Editor Python sidecar bağımlılıkları
+# PS Editor - OCR prototipi bağımlılıkları (adım 2)
 #
-# Bu aşamada sidecar yalnızca standart kütüphane kullanır; bağımlılık yoktur.
-# İlerleyen adımlar (FastAPI / OCR / çeviri / inpainting) eklenecek, örn:
+# Balon/metin bölgesi tespiti: ogkalu/comic-text-and-bubble-detector
+#   (Apache-2.0, RT-DETR-v2; ONNX model ilk çalıştırmada Hugging Face'ten iner)
+# OCR: manga-ocr (Apache-2.0, PyPI 0.1.14, saf Python wheel)
 #
-# fastapi
-# uvicorn
-# torch            # CUDA tespiti + ML için opsiyonel (büyük indirme, ayrıca ele alınacak)
-# pillow
+# Notlar:
+# - transformers <5 zorunludur: manga-ocr 0.1.14, transformers 5.x ile
+#   tokenizer yüklemesinde bozulur (yukarı akışta düzeltildi, burada pin'lenmiştir).
+# - torch: Windows PyPI wheel'i CUDA desteklidir (RTX 4060 otomatik bulunur).
+#   Açık bir CUDA sürümü kurmak isterseniz:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu126
+# - onnxruntime yalnızca CPU içindir (tespit modeli CPU'da çalışır; ağır
+#   yük olan OCR, PyTorch üzerinden GPU'ya gider).
+
+numpy
+pillow>=10.0.0
+onnxruntime
+huggingface_hub[hf_xet]
+torch
+manga-ocr==0.1.14
+transformers>=4.25,<5
