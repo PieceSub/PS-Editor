@@ -27,3 +27,9 @@ torchvision
 manga-ocr==0.1.14
 transformers>=4.25,<5
 simple-lama-inpainting==0.1.0
+
+# Adim 4: LLM ceviri + typesetting
+#   openai    : OpenAI-uyumlu ucnokta istemcisi (Apache-2.0)
+#   python-dotenv : .env dosyasindan API anahtari okuma
+python-dotenv>=1.0
+openai>=1.40

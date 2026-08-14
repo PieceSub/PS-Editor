@@ -1,0 +1,214 @@
+{
+  "image": "python\\test_data\\manga_test.png",
+  "cleaned": "python\\test_data\\manga_test_inpaint_lama.png",
+  "provider": {
+    "name": "mock",
+    "model": "mock-v1"
+  },
+  "target_language": "en",
+  "context": "",
+  "reading_order": [
+    {
+      "id": 0,
+      "index": 1,
+      "label_name": "text_bubble",
+      "bbox": [
+        484,
+        127,
+        673,
+        305
+      ],
+      "text": "元気ですよ、「はい、"
+    },
+    {
+      "id": 1,
+      "index": 2,
+      "label_name": "text_bubble",
+      "bbox": [
+        477,
+        477,
+        673,
+        682
+      ],
+      "text": "そんなことが「まさか．．．"
+    },
+    {
+      "id": 2,
+      "index": 5,
+      "label_name": "text_bubble",
+      "bbox": [
+        480,
+        868,
+        609,
+        996
+      ],
+      "text": "始まる物語が翌朝、"
+    },
+    {
+      "id": 3,
+      "index": 0,
+      "label_name": "text_bubble",
+      "bbox": [
+        122,
+        121,
+        316,
+        327
+      ],
+      "text": "元気ですか？こんにちは！"
+    },
+    {
+      "id": 4,
+      "index": 3,
+      "label_name": "text_bubble",
+      "bbox": [
+        114,
+        494,
+        322,
+        680
+      ],
+      "text": "大発見だ！すごい！"
+    },
+    {
+      "id": 5,
+      "index": 4,
+      "label_name": "text_bubble",
+      "bbox": [
+        116,
+        837,
+        330,
+        1036
+      ],
+      "text": "行こうと、それでは、"
+    }
+  ],
+  "translations": [
+    {
+      "id": 0,
+      "index": 1,
+      "label_name": "text_bubble",
+      "bbox": [
+        484,
+        127,
+        673,
+        305
+      ],
+      "original": "元気ですよ、「はい、",
+      "translation": "That is quite a surprise!",
+      "font_size": 36,
+      "lines": [
+        "That is",
+        "quite a",
+        "surprise!"
+      ],
+      "overflow": false
+    },
+    {
+      "id": 1,
+      "index": 2,
+      "label_name": "text_bubble",
+      "bbox": [
+        477,
+        477,
+        673,
+        682
+      ],
+      "original": "そんなことが「まさか．．．",
+      "translation": "I never expected this.",
+      "font_size": 36,
+      "lines": [
+        "I never",
+        "expected",
+        "this."
+      ],
+      "overflow": false
+    },
+    {
+      "id": 2,
+      "index": 5,
+      "label_name": "text_bubble",
+      "bbox": [
+        480,
+        868,
+        609,
+        996
+      ],
+      "original": "始まる物語が翌朝、",
+      "translation": "What should we do now?",
+      "font_size": 27,
+      "lines": [
+        "What",
+        "should we",
+        "do now?"
+      ],
+      "overflow": false
+    },
+    {
+      "id": 3,
+      "index": 0,
+      "label_name": "text_bubble",
+      "bbox": [
+        122,
+        121,
+        316,
+        327
+      ],
+      "original": "元気ですか？こんにちは！",
+      "translation": "Let me think about it.",
+      "font_size": 36,
+      "lines": [
+        "Let me",
+        "think",
+        "about it."
+      ],
+      "overflow": false
+    },
+    {
+      "id": 4,
+      "index": 3,
+      "label_name": "text_bubble",
+      "bbox": [
+        114,
+        494,
+        322,
+        680
+      ],
+      "original": "大発見だ！すごい！",
+      "translation": "That is quite a surprise!",
+      "font_size": 36,
+      "lines": [
+        "That is",
+        "quite a",
+        "surprise!"
+      ],
+      "overflow": false
+    },
+    {
+      "id": 5,
+      "index": 4,
+      "label_name": "text_bubble",
+      "bbox": [
+        116,
+        837,
+        330,
+        1036
+      ],
+      "original": "行こうと、それでは、",
+      "translation": "I never expected this.",
+      "font_size": 36,
+      "lines": [
+        "I never",
+        "expected",
+        "this."
+      ],
+      "overflow": false
+    }
+  ],
+  "timings_ms": {
+    "translate": 0.0,
+    "typeset": 39.3
+  },
+  "outputs": {
+    "translated": "python\\test_data\\manga_test_translated.png",
+    "before_after": "python\\test_data\\manga_test_before_after.png"
+  }
+}

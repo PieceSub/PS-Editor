@@ -1,0 +1,134 @@
+﻿GPU: NVIDIA GeForce RTX 4060  (OCR bu cihazda çalışacak)
+Görsel: python\test_data\manga_test.png (800x1130)
+Tespit modeli indiriliyor (https://huggingface.co/ogkalu/comic-text-and-bubble-detector/resolve/main/detector-v4-s_int8.onnx) ...
+Tespit modeli yüklendi: detector-v4-s_int8.onnx (11.1 MB, CPU)
+Tespit: 12 aday bölge (139 ms)
+Metin bölgesi (OCR adayı): 6  (balon çerçevesi: 6)
+manga-ocr modeli yükleniyor (ilk çalıştırmada indirir, ~400 MB)...
+python.exe : 2026-08-14 17:30:43.951 | INFO     | manga_ocr.ocr:__init__:16 - Loading OCR model from kha-white/manga-oc
+r-base
+At line:1 char:90
++ ... ing]::UTF8; & "python\.venv\Scripts\python.exe" "python\ocr_prototype ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (2026-08-14 17:3.../manga-ocr-base:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+2026-08-14 17:30:45.693 | INFO     | manga_ocr.ocr:__init__:22 - Using CUDA
+2026-08-14 17:30:46.790 | INFO     | manga_ocr.ocr:__init__:35 - OCR ready
+manga-ocr hazır (2.8 s, cihaz: GPU)
+
+  Bölge 1/6  [text_bubble]  conf=0.82  bbox=(122, 121, 316, 327)  OCR=103 ms
+    Metin: 元気ですか？こんにちは！
+
+  Bölge 2/6  [text_bubble]  conf=0.78  bbox=(484, 127, 673, 305)  OCR=90 ms
+    Metin: 元気ですよ、「はい、
+
+  Bölge 3/6  [text_bubble]  conf=0.78  bbox=(477, 477, 673, 682)  OCR=182 ms
+    Metin: そんなことが「まさか．．．
+
+  Bölge 4/6  [text_bubble]  conf=0.77  bbox=(114, 494, 322, 680)  OCR=168 ms
+    Metin: 大発見だ！すごい！
+
+  Bölge 5/6  [text_bubble]  conf=0.81  bbox=(116, 837, 330, 1036)  OCR=179 ms
+    Metin: 行こうと、それでは、
+
+  Bölge 6/6  [text_bubble]  conf=0.85  bbox=(480, 868, 609, 996)  OCR=154 ms
+    Metin: 始まる物語が翌朝、
+
+{
+  "image": "python\\test_data\\manga_test.png",
+  "gpu": {
+    "torch_cuda": true,
+    "device_name": "NVIDIA GeForce RTX 4060",
+    "nvidia_smi": "NVIDIA GeForce RTX 4060, 8188"
+  },
+  "detector": {
+    "model": "ogkalu/comic-text-and-bubble-detector/detector-v4-s_int8.onnx",
+    "backend": "onnxruntime-cpu",
+    "conf": 0.3
+  },
+  "ocr": {
+    "model": "kha-white/manga-ocr-base",
+    "device": "gpu"
+  },
+  "regions": [
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.8159641027450562,
+      "text": "元気ですか？こんにちは！",
+      "ocr_ms": 103,
+      "bbox": [
+        122,
+        121,
+        316,
+        327
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7776765823364258,
+      "text": "元気ですよ、「はい、",
+      "ocr_ms": 90,
+      "bbox": [
+        484,
+        127,
+        673,
+        305
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7811267375946045,
+      "text": "そんなことが「まさか．．．",
+      "ocr_ms": 182,
+      "bbox": [
+        477,
+        477,
+        673,
+        682
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7732895016670227,
+      "text": "大発見だ！すごい！",
+      "ocr_ms": 168,
+      "bbox": [
+        114,
+        494,
+        322,
+        680
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.8059626817703247,
+      "text": "行こうと、それでは、",
+      "ocr_ms": 179,
+      "bbox": [
+        116,
+        837,
+        330,
+        1036
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.8465373516082764,
+      "text": "始まる物語が翌朝、",
+      "ocr_ms": 154,
+      "bbox": [
+        480,
+        868,
+        609,
+        996
+      ]
+    }
+  ]
+}
