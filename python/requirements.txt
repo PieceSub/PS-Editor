@@ -30,6 +30,15 @@ simple-lama-inpainting==0.1.0
 
 # Adim 4: LLM ceviri + typesetting
 #   openai    : OpenAI-uyumlu ucnokta istemcisi (Apache-2.0)
-#   python-dotenv : .env dosyasindan API anahtari okuma
+#   anthropic : Anthropic Claude Messages API istemcisi (Apache-2.0)
+#   python-dotenv : .env dosyasindan API anahtari okuma (dev fallback)
 python-dotenv>=1.0
 openai>=1.40
+anthropic>=0.40
+
+# Adim 5: OS guvenli anahtar deposu (Windows Credential Manager /
+# macOS Keychain / Linux Secret Service). Cagri platforma gore keyring'in
+# kendi platform ozel bagimliliklarini kurar (Win: pywin32-ctypes,
+# Linux: SecretStorage + jeepney). PyInstaller paketleme notu:
+# python-sidecar.spec icindeki hiddenimports'a bakin.
+keyring>=25.0,<26

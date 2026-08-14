@@ -8,8 +8,27 @@ Protokol:
   Hata:                             {"id": 1, "ok": false, "error": "..."}
   Olay (push):                      {"event": "ready", "payload": {...}}
 
-Bu aşamada yalnızca Python standart kütüphanesi kullanılır; bağımlılık yoktur.
-(İlerleyen adımlarda FastAPI / OCR / çeviri / inpainting katmanları eklenecek.)
+Adım 5'ten itibaren komutlar:
+  - translate_page: uçtan uca OCR + inpainting + çeviri + typeset pipeline'ı.
+    İlerleme, stdout'tan {"event": "translate_page_progress", "payload": {...}}
+    olaylarıyla akar (payload.name = aşama; oran payload.progress, 0..1).
+    Rust tarafı bunları "python-event" olarak ön yüze iletir (1. adımda kurulan
+    mekanizmanın aynısı — yeni protokol yok). Sonuç, normal istek/yanıt
+    kanalından döner.
+  - set_api_key / delete_api_key: OS güvenli anahtar deposuna yazma/silme
+    (Windows Credential Manager / macOS Keychain / Linux Secret Service;
+    keyring kütüphanesi, PyInstaller için backend açıkça set edilir).
+  - list_providers: desteklenen sağlayıcılar + anahtar durumu (anahtar yok!).
+  - vram_report: GPU/VRAM durumu + çeviri modu kararı önizlemesi.
+
+Hata politikası: kullanıcıya gösterilebilir mesajlar için SidecarError;
+main() bunu yalnızca mesaj olarak (tip öneki olmadan) yanıtlar. pipeline.py
+bu hatanın alt sınıfı olan PipelineError'ı kullanır ve build_user_error ile
+API anahtarı/VRAM/model indirme hatalarını okunabilir Türkçe mesaja çevirir.
+
+Not: Bu dosya modül yükleme zamanında ağır bağımlılık (torch/cv2/PIL)
+içermez; pipeline.py yalnızca translate_page çağrıldığında (geç import)
+yüklenir, böylece ping/hello/check_cuda anında çalışır.
 """
 
 from __future__ import annotations
@@ -20,11 +39,20 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+# Protokol çıktısı her zaman ORİJİNAL stdout'a yazılır: pipeline sırasında
+# üçüncü taraf print()'leri bastırmak için sys.stdout geçici olarak
+# değiştirilebilir (quiet_stdout), ama JSON satırları bu referanstan akar.
+_STDOUT = sys.stdout
+
 
 def write_message(obj: dict) -> None:
     """stdout'a tek satır JSON yazar ve flush eder (pipe tamponu için kritik)."""
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    _STDOUT.write(json.dumps(obj, ensure_ascii=False) + "\n")
+    _STDOUT.flush()
+
+
+class SidecarError(Exception):
+    """Kullanıcıya gösterilebilir, stack-trace'siz hata. __str__ yalnızca mesajdır."""
 
 
 def cmd_hello(payload: dict) -> dict:
@@ -114,17 +142,144 @@ def cmd_check_cuda(payload: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------- adim 5: pipeline
+
+PROVIDER_NAMES = ["mock", "local", "openai", "openai_compat", "anthropic"]
+
+
+def cmd_translate_page(payload: dict) -> dict:
+    """Uçtan uca sayfa pipeline'ı.
+
+    Girdi: image yolu + hedef dil + mod (auto/local/api) + sağlayıcı ayarları.
+    Akış: translate_page_progress olayları (payload.name = aşama) -> sonuç.
+    Uzun işlem (bir sayfa birkaç saniye); bu süre boyunca stdin döngüsü
+    meşguldür — tek sayfa, tek komut kullanımı için kabul edilebilir.
+    """
+    from pipeline import (  # agir bagimliliklar yalnizca burada yuklenir
+        EVENT_NAME,
+        PipelineError,
+        build_user_error,
+        quiet_stdout,
+        translate_page_pipeline,
+    )
+    from translate_typeset_prototype import load_env
+
+    def emit(p: dict) -> None:
+        write_message({"event": EVENT_NAME, "payload": p})
+
+    try:
+        with quiet_stdout():
+            load_env()  # .env dev fallback'i (guvenli depo onceliklidir)
+            return translate_page_pipeline(
+                image_path=payload.get("image", ""),
+                target_lang=payload.get("target_lang", "en"),
+                mode=payload.get("mode", "auto"),
+                provider=payload.get("provider", "openai_compat"),
+                context=payload.get("context", ""),
+                api_key=payload.get("api_key"),
+                base_url=payload.get("base_url"),
+                model=payload.get("model"),
+                temperature=payload.get("temperature"),
+                timeout=payload.get("timeout"),
+                settings_override=payload.get("settings") or None,
+                emit=emit,
+                job_id=payload.get("job_id"),
+            )
+    except PipelineError as exc:
+        emit({"name": "error", "progress": 1.0, "message": exc.user_message,
+              "data": {"code": exc.code}})
+        raise SidecarError(exc.user_message) from exc
+    except Exception as exc:  # noqa: BLE001 - bilinmeyenler de kullanici dostu olsun
+        err = build_user_error(exc)
+        emit({"name": "error", "progress": 1.0, "message": err["message"],
+              "data": {"code": err["code"]}})
+        raise SidecarError(err["message"]) from exc
+
+
+def cmd_set_api_key(payload: dict) -> dict:
+    """API anahtarini OS guvenli deposuna yazar (asla yanit icinde gostermez)."""
+    from translate_typeset_prototype import store_credential
+
+    provider = payload.get("provider", "openai_compat")
+    api_key = payload.get("api_key", "")
+    if provider not in PROVIDER_NAMES or provider in ("mock", "local"):
+        raise SidecarError(
+            f"Bu saglayici icin anahtar saklanamaz: {provider!r} "
+            "(yalnizca openai / openai_compat / anthropic).")
+    if not api_key:
+        raise SidecarError("API anahtari bos olamaz.")
+    return store_credential(provider, api_key)
+
+
+def cmd_delete_api_key(payload: dict) -> dict:
+    from translate_typeset_prototype import secure_delete
+
+    provider = payload.get("provider", "openai_compat")
+    ok = secure_delete(provider)
+    return {"deleted": ok, "provider": provider}
+
+
+def cmd_list_providers(payload: dict) -> dict:
+    from translate_typeset_prototype import secure_get
+
+    providers = []
+    for name in PROVIDER_NAMES:
+        if name in ("mock", "local"):
+            providers.append({"name": name, "needs_key": False,
+                              "has_key": False})
+        else:
+            has = bool(secure_get(name))
+            providers.append({"name": name, "needs_key": True, "has_key": has})
+    return {"providers": providers}
+
+
+def cmd_vram_report(payload: dict) -> dict:
+    """GPU/VRAM + 'auto' modu karar onizlemesi (pipeline calistirmadan)."""
+    from pipeline import Settings, get_vram_info, resolve_translation_mode
+
+    vram = get_vram_info()
+    s = Settings.from_mapping(payload.get("settings") or None)
+    decision = resolve_translation_mode(
+        payload.get("mode", "auto"), s, vram)
+    return {
+        "vram": {k: v for k, v in vram.items() if k != "reason_unavailable"},
+        "mode_decision": {
+            "requested": decision["details"]["requested_mode"],
+            "decision": decision["decision"],
+            "reason": decision["reason"],
+            "settings": {
+                "media_reserve_mb": s.vram_media_reserve_mb,
+                "headroom_mb": s.vram_headroom_mb,
+                "translation_min_mb": s.vram_translation_min_mb,
+            },
+        },
+    }
+
+
 COMMANDS = {
     "hello": cmd_hello,
     "ping": cmd_ping,
     "check_cuda": cmd_check_cuda,
+    "translate_page": cmd_translate_page,
+    "set_api_key": cmd_set_api_key,
+    "delete_api_key": cmd_delete_api_key,
+    "list_providers": cmd_list_providers,
+    "vram_report": cmd_vram_report,
 }
 
 
 def main() -> int:
-    # Pipe durumunda Python stdout'u blok tamponludur; satır bazlı tamponlama aç.
-    sys.stdout.reconfigure(line_buffering=True)
-    write_message({"event": "ready", "payload": {"version": "0.1.0"}})
+    # Pipe durumunda Python stdout'u blok tamponludur; satır bazlı tamponlama
+    # aç. prototiplerdeki ensure_utf8_stdout ile aynı felsefe: stderr de
+    # (manga-ocr/logging Japangıa yazabilir) UTF-8 + errors=replace olmadan
+    # cp1254 gibi kodlamalarda UnicodeEncodeError fırlatılabilir.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace",
+                           line_buffering=True)
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
+    write_message({"event": "ready", "payload": {"version": "0.2.0"}})
 
     for line in sys.stdin:
         line = line.strip()
@@ -150,6 +305,9 @@ def main() -> int:
                 raise ValueError(f"bilinmeyen komut: {cmd!r}")
             result = handler(payload)
             write_message({"id": msg_id, "ok": True, "result": result})
+        except SidecarError as exc:
+            # Kullanici dostu hata: tip adi OLMADAN, yalnizca mesaj yazilir.
+            write_message({"id": msg_id, "ok": False, "error": str(exc)})
         except Exception as exc:  # noqa: BLE001 - süreç canlı kalmalı
             write_message({"id": msg_id, "ok": False, "error": f"{type(exc).__name__}: {exc}"})
 

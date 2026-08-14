@@ -64,4 +64,20 @@ listen("python-event", (ev) => {
   if (p?.name === "exit") setStatus("error", "Python servisi kapandı");
 });
 
+// Adim 5: translate_page uzun islem ilerleme olaylarini dinle (python-event
+// uzerinden akar; name = asama, progress = 0..1). Ornek bir gorunum: son
+// satiri logla. Gercek arayuz, balon/form tabanli bir ilerleme cubugu yapar.
+listen("translate_page_progress", (ev) => {
+  const p = ev.payload as {
+    name?: string;
+    progress?: number;
+    message?: string;
+    job_id?: string;
+  };
+  if (!p?.name) return;
+  const pct = p.progress != null ? ` ${Math.round(p.progress * 100)}%` : "";
+  outputEl.textContent = `[${p.name}]${pct} ${p.message ?? ""}`;
+  outputEl.className = "output ok";
+});
+
 void ping();

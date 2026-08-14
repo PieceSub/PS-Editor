@@ -1,0 +1,145 @@
+{
+  "image": "test_data\\manga_test.png",
+  "regions": [
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.8159641027450562,
+      "bbox": [
+        122,
+        121,
+        316,
+        327
+      ],
+      "text": "元気ですか？こんにちは！"
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7776765823364258,
+      "bbox": [
+        484,
+        127,
+        673,
+        305
+      ],
+      "text": "元気ですよ、「はい、"
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7811267375946045,
+      "bbox": [
+        477,
+        477,
+        673,
+        682
+      ],
+      "text": "そんなことが「まさか．．．"
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7732895016670227,
+      "bbox": [
+        114,
+        494,
+        322,
+        680
+      ],
+      "text": "大発見だ！すごい！"
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.8059626817703247,
+      "bbox": [
+        116,
+        837,
+        330,
+        1036
+      ],
+      "text": "行こうと、それでは、"
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.8465373516082764,
+      "bbox": [
+        480,
+        868,
+        609,
+        996
+      ],
+      "text": "始まる物語が翌朝、"
+    }
+  ],
+  "bubbles": [
+    {
+      "label": 0,
+      "label_name": "bubble",
+      "score": 0.9511958360671997,
+      "bbox": [
+        65,
+        466,
+        374,
+        704
+      ]
+    },
+    {
+      "label": 0,
+      "label_name": "bubble",
+      "score": 0.946259617805481,
+      "bbox": [
+        66,
+        108,
+        374,
+        341
+      ]
+    },
+    {
+      "label": 0,
+      "label_name": "bubble",
+      "score": 0.9456890821456909,
+      "bbox": [
+        426,
+        458,
+        736,
+        701
+      ]
+    },
+    {
+      "label": 0,
+      "label_name": "bubble",
+      "score": 0.9433139562606812,
+      "bbox": [
+        431,
+        105,
+        730,
+        324
+      ]
+    },
+    {
+      "label": 0,
+      "label_name": "bubble",
+      "score": 0.9398316144943237,
+      "bbox": [
+        464,
+        826,
+        627,
+        1024
+      ]
+    },
+    {
+      "label": 0,
+      "label_name": "bubble",
+      "score": 0.9078190326690674,
+      "bbox": [
+        62,
+        808,
+        381,
+        1053
+      ]
+    }
+  ]
+}

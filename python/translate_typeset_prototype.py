@@ -12,26 +12,36 @@ urettigi temizlenmis gorseli girdi olarak alir:
      balon icinde ortala, beyaz kontur + siyah dolgu (scanlation stili)
 
 LLM saglayicisi soyutlanmistir (TranslationBackend + create_backend fabrikasi).
-Yeni saglayici eklemek: sınıf yazip BACKEND_REGISTRY'ye kaydetmek yeterli.
+Yeni saglayici eklemek: sınıf yazip create_backend'e baglamak yeterli.
 Su an kayitli:
   - mock          : API anahtari gerektirmez; pipeline'i uctan uca test etmek
                     icin deterministik sahte ceviri uretir.
-  - api           : openai kutuphanesiyle OpenAI ya da herhangi bir
-                    OpenAI-uyumlu ucnokta (Anthropic dahil degil; ancak
-                    OpenAI-uyumlu arayuz sunan Groq, Together, DeepSeek,
-                    Ollama, LM Studio, vLLM vb. - BASE_URL + API_KEY ile).
+  - api / openai_compat : openai kutuphanesiyle OpenAI ya da herhangi bir
+                    OpenAI-uyumlu ucnokta (Groq, Together, DeepSeek, Ollama,
+                    LM Studio, vLLM vb. - BASE_URL + API_KEY ile).
+  - openai        : "openai_compat"in OpenAI resmi ucnoktasina kilitli hali
+                    (BASE_URL bos birakilir); ayri sinif gerektirmez.
+  - anthropic     : Anthropic Claude Messages API (OpenAI-uyumlu DEGILDIR:
+                    system top-level parametredir, max_tokens zorunludur,
+                    yanit content blok dizisidir) -- ayri AnthropicBackend
+                    sinifidir; OpenAICompatBackend'e yazilmaz.
   - local         : yerel Ollama (BASE_URL http://localhost:11434/v1).
 
-Kullanim modlari (hedef 5-6. adimdaki ayar ekraniyla birebir ayni felsefe):
-  - auto  : .env'de LLM_API_KEY varsa "api" moduna, yoksa "mock"a duser.
-  - local : LLM_BASE_URL yoksa Ollama adresine varsayar; anahtar gerekmez.
-  - api   : LLM_API_KEY + LLM_BASE_URL + LLM_MODEL (.env veya CLI argumanlari).
+Ceviri kaynagi secimi ("auto"/"local"/"api") ve VRAM esigi mantigi
+pipeline.py'deki resolve_translation_mode icindedir (adim 5). Burada
+yalnizca backend uretimi + kimlik cozumu vardir.
 
 API anahtari / base_url / model, "resolve_credentials" adli TEK fonksiyondan
-okunur (CLI argumani > .env > varsayilan). Ileride (FastAPI + Tauri
-entegrasyonunda) anahtarlar Windows Credential Manager gibi guvenli bir
-depoya tasinacak; o zaman yalnizca bu fonksiyonun giris kaynagi degisir,
-donen imza ayni kalir.
+okunur. Kaynak onceligi (adim 5 itibariyle):
+  1) CLI/payload argumanlari
+  2) isletim sistemi guvenli anahtar deposu (keyring: Windows Credential
+     Manager / macOS Keychain / Linux Secret Service) -- PyInstaller'daki
+     bilinen backend kesfi sorunu icin backend acikca set edilir
+  3) .env ortam degiskenleri (geliştirme fallback'i)
+  4) kod varsayilanlari
+
+Guvenli depoya yazma: store_credential() (sidecar "set_api_key" komutu bunu
+cagirir). Anahtarlar hicbir zaman stdout/log'a yazilmaz.
 
 API anahtari/model python/.env dosyasindan okunur (python-dotenv):
   LLM_PROVIDER=auto|local|api|mock
@@ -256,6 +266,67 @@ class OpenAICompatBackend:
         return map_translations(data, entries)
 
 
+class AnthropicBackend:
+    """Anthropic Claude Messages API backend'i (OpenAI-uyumlu DEGIL).
+
+    OpenAI'dan farkli noktalar (adim 5 arastirma):
+      - Kimlik: Authorization: Bearer yerine x-api-key + anthropic-version.
+      - Sisteme komut uyeleri icinde "system" ROLE yoktur; system TOP-LEVEL
+        parametredir.
+      - max_tokens ZORUNLUDUR (yoksa gecersiz 400).
+      - Yanit: choices[0].message.content yerine content (blok dizisi);
+        metin bloklarinda .text/.type vardir. Text'i toplariz.
+      - response_format / seed gibi OpenAI parametreleri desteklenmez;
+        JSON, prompt ile istenir ve parse_llm_json ile ayiklanir
+        (OpenAI meslektaisiyla ayni yapidal prompt kullanilir).
+    """
+
+    name = "anthropic"
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str | None = None,
+        model: str = "claude-sonnet-4-6",
+        temperature: float = 0.2,
+        timeout: float = 120.0,
+        max_tokens: int = 4096,
+    ):
+        from anthropic import Anthropic
+
+        kwargs: dict = {"api_key": api_key, "timeout": timeout}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self.client = Anthropic(**kwargs)
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+
+    def translate_page(
+        self,
+        entries: list[dict],
+        target_lang: str,
+        context: str = "",
+    ) -> dict[int, str]:
+        system, user = OpenAICompatBackend.build_prompt(
+            entries, target_lang, context)
+        resp = self.client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            system=system,
+            temperature=self.temperature,
+            messages=[{"role": "user", "content": user}],
+        )
+        parts = [
+            block.text
+            for block in resp.content
+            if getattr(block, "type", None) == "text"
+        ]
+        raw = "\n".join(parts)
+        data = parse_llm_json(raw)
+        return map_translations(data, entries)
+
+
 # ---------------------------------------------------------------- LLM yanit ayristirma
 
 def strip_code_fence(text: str) -> str:
@@ -319,27 +390,127 @@ def map_translations(data: object, entries: list[dict]) -> dict[int, str]:
     return out
 
 
+# ---------------------------------------------------------------- guvenli anahtar deposu
+
+KEYRING_SERVICE = "PS-Editor"
+KEYRING_FIELD = "api_key"
+
+
+def _init_keyring_backend() -> None:
+    """PyInstaller paketinde keyring backend'leri entry-point kesfiyle
+    gorunmez (bilinen sorun: jaraco/keyring #324, #439, #591). Platform
+    backend'ini acikca import edip set_keyring ile sabitleriz; hata olursa
+    sessizce gec (cagiran .env fallback'ine duser).
+    """
+    try:
+        import keyring
+    except ImportError:
+        return
+    try:
+        if sys.platform == "win32":
+            from keyring.backends import Windows
+            backend = Windows.WinVaultKeyring()
+        elif sys.platform == "darwin":
+            from keyring.backends import macOS
+            backend = macOS.Keyring()
+        else:
+            from keyring.backends import SecretService
+            backend = SecretService.Keyring()
+        keyring.set_keyring(backend)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def secure_get(provider: str, field: str = KEYRING_FIELD) -> str | None:
+    """OS guvenli deposundan deger okur. Asla istisna firlatmaz (None doner):
+    kilitli keyring (macOS), backend yoklugu (Linux headless), PyInstaller
+    backend sorunu -- hepsinde sessizce .env fallback'ine gecilir.
+    """
+    try:
+        _init_keyring_backend()
+        import keyring
+        return keyring.get_password(KEYRING_SERVICE, f"{provider}:{field}")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def secure_set(provider: str, api_key: str, field: str = KEYRING_FIELD) -> bool:
+    """OS guvenli deposuna API anahtari yazar. Basariyi bool olarak doner;
+    anahtar hicbir yerde loglanmaz."""
+    if not api_key:
+        return False
+    try:
+        _init_keyring_backend()
+        import keyring
+        keyring.set_password(KEYRING_SERVICE, f"{provider}:{field}", api_key)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def secure_delete(provider: str, field: str = KEYRING_FIELD) -> bool:
+    try:
+        _init_keyring_backend()
+        import keyring
+        keyring.delete_password(KEYRING_SERVICE, f"{provider}:{field}")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def store_credential(provider: str, api_key: str) -> dict:
+    """sidecar "set_api_key" komutunun kullandigi resmi yazma noktasi."""
+    ok = secure_set(provider, api_key)
+    return {"stored": ok, "provider": provider,
+            "note": None if ok else
+            "Guvenli depo kullanilamadi; anahtar kaydedilmedi. "
+            "Geliştirme ortaminda .env kullanabilirsiniz."}
+
+
 # ---------------------------------------------------------------- backend fabrikasi
 
 DEFAULT_OLLAMA_URL = "http://localhost:11434/v1"
 DEFAULT_OLLAMA_MODEL = "llama3.1"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 
 
 def resolve_credentials(
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    provider: str = "openai_compat",
 ) -> tuple[str, str | None, str, float, float]:
     """API anahtari / base_url / model kaynagini TEK noktada toplar.
 
-    Kaynak onceligi: CLI argumanlari > ortam degiskenleri > varsayilan.
-    Ileride guvenli anahtar deposuna (Windows Credential Manager vb.)
-    gecis yapilirsa yalnizca bu fonksiyon degisir.
+    Kaynak onceligi (adim 5): CLI/payload argumanlari > OS guvenli deposu
+    (keyring: Windows Credential Manager / macOS Keychain / Linux Secret
+    Service) > .env ortam degiskenleri > kod varsayilanlari.
+
+    Donen imza DEGISMEDI (api_key, base_url, model, temperature, timeout);
+    yalnizca giris kaynaklari guvenli depo ile genisletildi. Anthropic,
+    provider="anthropic" ile cagrildiginda kendine ait env adlarini okur.
     """
+    key = (api_key or "").strip()
+    if not key:
+        key = (secure_get(provider) or "").strip()
+    if not key:
+        key = os.environ.get("LLM_API_KEY", "").strip()
+
+    if provider == "anthropic":
+        if not key:
+            key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        url = base_url or os.environ.get("ANTHROPIC_BASE_URL") or None
+        mdl = model or os.environ.get("ANTHROPIC_MODEL",
+                                      DEFAULT_ANTHROPIC_MODEL)
+    else:
+        url = base_url or os.environ.get("LLM_BASE_URL") or None
+        mdl = model or os.environ.get("LLM_MODEL", DEFAULT_OPENAI_MODEL)
+
     return (
-        api_key or os.environ.get("LLM_API_KEY", "").strip(),
-        base_url or os.environ.get("LLM_BASE_URL") or None,
-        model or os.environ.get("LLM_MODEL", "gpt-4.1-mini"),
+        key,
+        url,
+        mdl,
         float(os.environ.get("LLM_TEMPERATURE", "0.2")),
         float(os.environ.get("LLM_TIMEOUT", "120")),
     )
@@ -353,22 +524,41 @@ def create_backend(
     temperature: float | None = None,
     timeout: float | None = None,
 ) -> TranslationBackend:
-    """Provider adindan backend ornegi uretir (kayit defteri tabanli).
+    """Provider adindan backend ornegi uretir.
 
-    Yeni saglayici: bu dosyaya sınıf ekle, asagidaki sozluge kaydet.
-    Anthropic CLI prototipinde test edilemedigi icin su an kayitli degil;
-    eklenince "api" modunun yanina "anthropic" modu da CLI'a baglanir.
+    - mock          -> MockBackend (anahtar gerekmez)
+    - openai        -> OpenAICompatBackend, resmi OpenAI ucnoktasi
+    - openai_compat / api -> OpenAICompatBackend, BASE_URL+MODEL ile
+      (Groq, Together, DeepSeek, LM Studio, vLLM vb.)
+    - local         -> OpenAICompatBackend, Ollama adresi (anahtar gerekmez)
+    - anthropic     -> AnthropicBackend (ayri API formati)
     """
     if provider == "mock":
         return MockBackend()
 
-    if provider in ("api", "openai_compat", "local"):
-        key, url, mdl, temp, to = resolve_credentials(api_key, base_url, model)
+    if provider in ("openai", "openai_compat", "api", "local"):
+        key, url, mdl, temp, to = resolve_credentials(
+            api_key, base_url, model, provider=provider)
         if provider == "local":
             url = url or DEFAULT_OLLAMA_URL
             mdl = model or DEFAULT_OLLAMA_MODEL
-            key = api_key or ""  # Ollama anahtar istemez
+            # Ollama anahtar istemez ancak openai>=3 bos string'i reddeder;
+            # dolgu anahtar geciliyor.
+            key = api_key or "ollama"
+        elif provider == "openai":
+            url = None  # resmi ucnokta; LLM_BASE_URL kasitla yok sayilir
         return OpenAICompatBackend(
+            api_key=key,
+            base_url=url,
+            model=mdl,
+            temperature=temperature if temperature is not None else temp,
+            timeout=timeout if timeout is not None else to,
+        )
+
+    if provider == "anthropic":
+        key, url, mdl, temp, to = resolve_credentials(
+            api_key, base_url, model, provider="anthropic")
+        return AnthropicBackend(
             api_key=key,
             base_url=url,
             model=mdl,
@@ -634,10 +824,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--target-lang", default="en",
                    help="Hedef dil (kod veya ad; 'Turkish' de olur)")
     p.add_argument("--provider", choices=["auto", "mock", "local", "api",
-                                          "openai_compat"],
+                                          "openai", "openai_compat",
+                                          "anthropic"],
                    default="auto",
                    help="auto: LLM_API_KEY varsa api, yoksa mock | "
-                        "local: yerel Ollama | api: .env/CLI'dan anahtar+adres")
+                        "local: yerel Ollama | openai: OpenAI | "
+                        "openai_compat: BASE_URL+MODEL ile uyumlu ucnokta | "
+                        "anthropic: Claude Messages API | "
+                        "api: .env/guvenli depodan anahtar+adres")
     p.add_argument("--api-key", default=None,
                    help="LLM_API_KEY yerine dogrudan anahtar (CLI kullanimi "
                         "ortak shell'lerde onerilmez)")
@@ -720,10 +914,11 @@ def main(argv: list[str] | None = None) -> int:
     # ---- 3) Ceviri ----
     provider_name = args.provider
     if provider_name == "auto":
-        provider_name = "api" if resolve_credentials(args.api_key)[0] else "mock"
+        provider_name = "api" if resolve_credentials(
+            args.api_key, provider="openai_compat")[0] else "mock"
         if provider_name == "mock":
-            info("auto: LLM_API_KEY yok -> mock backend (deterministik test "
-                 "cevirisi). Gercek ceviri icin .env'i doldurun.")
+            info("auto: API anahtari yok (guvenli depo + .env) -> mock "
+                 "backend (deterministik test cevirisi).")
 
     try:
         backend: TranslationBackend = create_backend(
@@ -738,12 +933,18 @@ def main(argv: list[str] | None = None) -> int:
         info(f"Hata: backend kurulamadi: {exc}")
         return 2
 
-    if backend.name == "openai_compat":
-        _key, url, _mdl, _t, _to = resolve_credentials(args.api_key,
-                                                       args.base_url, args.model)
+    if backend.name in ("openai_compat", "anthropic"):
+        _key, url, _mdl, _t, _to = resolve_credentials(
+            args.api_key, args.base_url, args.model, provider=backend.name)
+        if provider_name == "anthropic" and not _key:
+            info("Hata: Anthropic API anahtari bos. Guvenli depoya "
+                 "kaydedin (set_api_key) ya da .env'e ANTHROPIC_API_KEY "
+                 "yazin; --provider mock ile test edebilirsiniz.")
+            return 2
         if not _key and not url:
-            info("Hata: LLM_API_KEY bos. python/.env dosyasina yazin ya da "
-                 "--provider mock kullanin.")
+            info("Hata: API anahtari bos. Guvenli depoya kaydedin ya da "
+                 "python/.env dosyasina yazin; --provider mock ile test "
+                 "edebilirsiniz.")
             return 2
 
     info(f"Provider: {backend.name} (model: {backend.model}) | "
