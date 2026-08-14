@@ -1,0 +1,21 @@
+# Node
+node_modules/
+dist/
+
+# Rust
+src-tauri/target/
+
+# Python
+python/.venv/
+python/build/
+python/*.spec
+__pycache__/
+*.pyc
+
+# Sidecar derlemeleri (tauri.conf.json externalBin tarafından beklense de
+# dosya olarak repo'ya girmez; her platformda ayrı derlenir)
+src-tauri/binaries/
+
+# Loglar / yerel
+*.log
+.DS_Store

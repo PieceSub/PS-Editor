@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PS Editor</title>
+  </head>
+  <body>
+    <main id="app">
+      <header>
+        <h1>PS Editor</h1>
+        <p class="subtitle">PieceSub - Manga &amp; Anime Çeviri Aracı</p>
+        <div id="sidecar-status" class="badge unknown">Python servisi bağlanıyor…</div>
+      </header>
+
+      <section class="card">
+        <h2>Python Sidecar İletişimi</h2>
+        <p>
+          Tauri, Python servisini uygulama açılışında sidecar olarak başlatır.
+          İletişim <code>stdin/stdout</code> üzerinden JSON satırları (JSON Lines) ile yapılır.
+        </p>
+        <div class="row">
+          <button id="btn-hello">Merhaba de</button>
+          <button id="btn-cuda">CUDA / GPU Denetimi</button>
+        </div>
+        <pre id="output" class="output">—</pre>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

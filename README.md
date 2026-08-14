@@ -1,1 +1,148 @@
-# PS-Editor
+# PS Editor
+
+**PieceSub** markası altında manga ve anime çevirisi için masaüstü uygulaması.
+
+Mimari: **Tauri 2** (Rust + WebView) kabuk + **Python sidecar** (ileride FastAPI;
+OCR / çeviri / inpainting gibi ağır ML işlerini bu servis yapacak).
+
+Öncelik sırası: Windows > Linux > macOS > Android (son).
+
+---
+
+## Kurallar / Bağımlılıklar
+
+| Bağımlılık | Gerekçe | Windows kurulumu |
+|---|---|---|
+| Rust (stable ≥ 1.88) | Tauri çekirdeği | `winget install Rustlang.Rustup` (MSVC target ile) |
+| MSVC Build Tools | C++ linker + Windows SDK | `winget install Microsoft.VisualStudio.2022.BuildTools --override "--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"` |
+| Node.js LTS ≥ 20 | Frontend (Vite + TS) | `winget install OpenJS.NodeJS.LTS` |
+| Python 3.11+ | Sidecar | `winget install Python.Python.3.11` |
+| WebView2 Runtime | WebView (Win11'de hazır) | [Microsoft indirme](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) |
+
+Not: MSI paketi üretmek istiyorsanız Windows "VBSCRIPT" isteğe bağlı özelliğinin açık olması gerekir (`failed to run light.exe` hatası görürseniz kontrol edin).
+
+PowerShell Notu: npm betikleri `npm.ps1` yerine `npm.cmd` ile çağrılır; `npm` PowerShell'de
+çalışmazsa `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` uygulayın ya da `npm.cmd` kullanın.
+
+---
+
+## Hızlı Başlangıç (yeni ortam)
+
+```powershell
+# 1) Python sanal ortamı (python/.venv)
+npm run setup:python
+
+# 2) Frontend bağımlılıkları
+npm install
+
+# 3) Python sidecar'ı PyInstaller ile derle -> src-tauri/binaries/
+npm run sidecar:build
+
+# 4) Geliştirme modu (pencere açılır)
+npm run tauri dev
+```
+
+> **2. adımdan sonraki `npm run` komutları `npm.cmd run` gerektirebilir.**
+
+### Python tarafında hızlı iterasyon (PyInstaller'sız)
+
+Sidecar üretim binary'si ile çalışıyor olsa bile Python kodunu `python/sidecar.py` içinde
+değiştirip derlemeden denemek isterseniz:
+
+```powershell
+$env:PS_EDITOR_PY_SOURCE = "venv"   # Rust tarafı venv Python'u kullanır
+npm.cmd run tauri dev
+```
+
+Bunun çalışabilmesi için `src-tauri/binaries/` içinde binary bulunmalıdır (tauri-build derleme
+aşamasında `externalBin` dosyasının varlığını zorunlu tutar).
+
+---
+
+## Python ↔ Tauri İletişim Mimarisi
+
+**Seçim: stdin/stdout üzerinden JSON Lines (NDJSON).** Neden HTTP port değil:
+
+1. Tauri'nin sidecar mekanizması (`tauri-plugin-shell`) stdin/stdout pipe'larını doğal olarak
+   yönetir (`CommandEvent::Stdout/Stderr`) — ekstra ayar, port, CORS veya firewall izni gerekmez.
+2. Dev (venv python) ve prod (PyInstaller exe) modlarında **aynı kod yolu** kullanılır.
+3. Hayat döngüsü (başlat/kapat) Tauri'ye aittir; süreç kapanınca Tauri bunu fark eder.
+
+İleride FastAPI eklendiğinde: stdin/stdout **kontrol kanalı** (start/stop/health/ping) olarak
+kalır, büyük veri (OCR/çeviri) HTTP üzerinden akar — topluluğun yerleşik deseni budur.
+
+### Protokol
+
+```
+İstek (Tauri -> Python, stdin):   {"id": 1, "cmd": "hello", "payload": {...}}
+Yanıt (Python -> Tauri, stdout):  {"id": 1, "ok": true,  "result": {...}}
+Hata:                             {"id": 1, "ok": false, "error": "..."}
+Olay (push):                      {"event": "ready", "payload": {...}}
+```
+
+- Her satır tek bir JSON nesnesidir (UTF-8).
+- `id` istekleri eşleştirir; Rust tarafı yanıtı bekleyen `invoke` çağrısına yönlendirir.
+- Olaylar ön yüze `python-event` adıyla yayınlanır.
+- Mevcut komutlar: `ping`, `hello`, `check_cuda` (ve kapanışta `shutdown`).
+
+### Sidecar yapılandırması
+
+- `src-tauri/tauri.conf.json` → `bundle.externalBin: ["binaries/python-sidecar"]`
+  (dosya adı `python-sidecar-<target-triple>.exe` olmalı; tauri-build derlemede varlığını zorunlu tutar).
+- İzinler: `src-tauri/capabilities/default.json` → `shell:allow-spawn` + `sidecar: true`.
+- Rust: `app.shell().sidecar("python-sidecar")`; fallback olarak `PS_EDITOR_PY_SOURCE=venv`
+  ile `python/.venv/Scripts/python.exe python/sidecar.py`.
+
+---
+
+## Proje Yapısı
+
+```
+PS-Editor/
+├── package.json              # vite, tauri CLI, komut kestirmeleri
+├── vite.config.ts            # 1420 portu, src-tauri/python izleme dışı
+├── tsconfig.json
+├── index.html
+├── app-icon.png              # ikon kaynağı (tauri icon ile yeniden üretilir)
+├── src/                      # Ön yüz (vanilla TypeScript)
+│   ├── main.ts               # invoke köprüleri + python-event dinleyicisi
+│   └── styles.css
+├── python/
+│   ├── sidecar.py            # JSON Lines sidecar (sadece stdlib)
+│   └── requirements.txt      # şu an boş; FastAPI/ML ileride
+├── scripts/
+│   ├── setup-python.ps1      # venv oluştur
+│   └── build-sidecar.ps1     # PyInstaller -> src-tauri/binaries/python-sidecar-<triple>.exe
+└── src-tauri/
+    ├── tauri.conf.json       # externalBin, pencere, kimlik
+    ├── Cargo.toml
+    ├── capabilities/default.json
+    ├── icons/                # tauri icon ile üretildi
+    ├── binaries/             # sidecar exe (gitignore'da; her platformda ayrı derlenir)
+    └── src/
+        ├── main.rs
+        └── lib.rs            # sidecar süpervizörü: spawn, stdin/stdout, istek eşleştirme
+```
+
+---
+
+## Sık Karşılaşılan Sorunlar
+
+| Belirti | Çözüm |
+|---|---|
+| `resource path binaries\python-sidecar-... doesn't exist` | `npm.cmd run sidecar:build` (tauri-build derlemede binary ister) |
+| Eski Python kodu çalışıyor (prod) | `src-tauri/target/release/python-sidecar.exe` dosyasını silip yeniden derleyin (tauri-build bu önbelleği güncellemez — [tauri#15134](https://github.com/tauri-apps/tauri/issues/15134)) |
+| `npm` PowerShell'de "scripts disabled" | `npm.cmd` kullanın veya `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| MSI hatası `failed to run light.exe` | Windows "VBSCRIPT" özelliğini açın |
+| Pencere açılıp anında kapanıyor | WebView2 Runtime eksik — kurun |
+| Orphan python-sidecar süreci | Uygulamayı force-kill etmeyin; pencereyi normal kapatın (Exit handler'ı öldürür) |
+
+---
+
+## Yol Haritası (sonraki adımlar)
+
+1. FastAPI katmanı: `sidecar.py` içine uvicorn + FastAPI; stdin/stdout kontrol kanalı + HTTP veri kanalı.
+2. `python/requirements.txt` bağımlılıkları (torch, pillow...) — CUDA tespiti şimdiden `check_cuda` komutunda.
+3. Çeviri/OCR/inpainting modülleri ve Tauri komutları.
+4. Linux/macOS build kurulumları; `sidecar:build` scriptine platform üçlüleri.
+5. Android (en son).

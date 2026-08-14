@@ -1,0 +1,9 @@
+# PS Editor Python sidecar bağımlılıkları
+#
+# Bu aşamada sidecar yalnızca standart kütüphane kullanır; bağımlılık yoktur.
+# İlerleyen adımlar (FastAPI / OCR / çeviri / inpainting) eklenecek, örn:
+#
+# fastapi
+# uvicorn
+# torch            # CUDA tespiti + ML için opsiyonel (büyük indirme, ayrıca ele alınacak)
+# pillow
