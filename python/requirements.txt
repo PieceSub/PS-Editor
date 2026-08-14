@@ -1,8 +1,10 @@
-# PS Editor - OCR prototipi bağımlılıkları (adım 2)
+# PS Editor - OCR + Inpainting prototipi bağımlılıkları (adım 2 ve 3)
 #
 # Balon/metin bölgesi tespiti: ogkalu/comic-text-and-bubble-detector
 #   (Apache-2.0, RT-DETR-v2; ONNX model ilk çalıştırmada Hugging Face'ten iner)
 # OCR: manga-ocr (Apache-2.0, PyPI 0.1.14, saf Python wheel)
+# Inpainting: simple-lama-inpainting (Apache-2.0, PyPI 0.1.0; big-lama
+#   checkpoint ~206 MB ilk çalıştırmada GitHub release'den iner).
 #
 # Notlar:
 # - transformers <5 zorunludur: manga-ocr 0.1.14, transformers 5.x ile
@@ -12,11 +14,16 @@
 #   pip install torch --index-url https://download.pytorch.org/whl/cu126
 # - onnxruntime yalnızca CPU içindir (tespit modeli CPU'da çalışır; ağır
 #   yük olan OCR, PyTorch üzerinden GPU'ya gider).
+# - opencv (cv2) ayrıca listelenmez: simple-lama-inpainting onu bağımlılık
+#   olarak çeker. opencv-python ile opencv-python-headless birbiriyle
+#   çakışır; ikisini aynı anda elle kurmayın.
 
 numpy
 pillow>=10.0.0
 onnxruntime
 huggingface_hub[hf_xet]
 torch
+torchvision
 manga-ocr==0.1.14
 transformers>=4.25,<5
+simple-lama-inpainting==0.1.0

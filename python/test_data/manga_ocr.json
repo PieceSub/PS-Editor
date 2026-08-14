@@ -1,0 +1,124 @@
+﻿GPU: NVIDIA GeForce RTX 4060  (OCR bu cihazda ├ğal─▒┼şacak)
+G├Ârsel: test_data\manga_test.png (800x1130)
+Tespit modeli indiriliyor (https://huggingface.co/ogkalu/comic-text-and-bubble-detector/resolve/main/detector-v4-s_int8.onnx) ...
+Tespit modeli y├╝klendi: detector-v4-s_int8.onnx (11.1 MB, CPU)
+Tespit: 12 aday b├Âlge (156 ms)
+Metin b├Âlgesi (OCR aday─▒): 6  (balon ├ğer├ğevesi: 6)
+manga-ocr modeli y├╝kleniyor (ilk ├ğal─▒┼şt─▒rmada indirir, ~400 MB)...
+manga-ocr haz─▒r (2.7 s, cihaz: GPU)
+
+  B├Âlge 1/6  [text_bubble]  conf=0.82  bbox=(122, 121, 316, 327)  OCR=139 ms
+    Metin: Õàâµ░ùÒüğÒüÖÒüï´╝şÒüôÒéôÒü½ÒüíÒü»´╝ü
+
+  B├Âlge 2/6  [text_bubble]  conf=0.78  bbox=(484, 127, 673, 305)  OCR=128 ms
+    Metin: Õàâµ░ùÒüğÒüÖÒéêÒÇüÒÇîÒü»ÒüäÒÇü
+
+  B├Âlge 3/6  [text_bubble]  conf=0.78  bbox=(477, 477, 673, 682)  OCR=161 ms
+    Metin: ÒüØÒéôÒü¬ÒüôÒü¿ÒüîÒÇîÒü¥ÒüòÒüï´╝Ä´╝Ä´╝Ä
+
+  B├Âlge 4/6  [text_bubble]  conf=0.77  bbox=(114, 494, 322, 680)  OCR=111 ms
+    Metin: ÕñğÖ║×ĞïÒüá´╝üÒüÖÒüöÒüä´╝ü
+
+  B├Âlge 5/6  [text_bubble]  conf=0.81  bbox=(116, 837, 330, 1036)  OCR=123 ms
+    Metin: ×íîÒüôÒüåÒü¿ÒÇüÒüØÒéîÒüğÒü»ÒÇü
+
+  B├Âlge 6/6  [text_bubble]  conf=0.85  bbox=(480, 868, 609, 996)  OCR=105 ms
+    Metin: ÕğïÒü¥Òéïë®×¬ŞÒüî┐îµ£ØÒÇü
+
+{
+  "image": "test_data\\manga_test.png",
+  "gpu": {
+    "torch_cuda": true,
+    "device_name": "NVIDIA GeForce RTX 4060",
+    "nvidia_smi": "NVIDIA GeForce RTX 4060, 8188"
+  },
+  "detector": {
+    "model": "ogkalu/comic-text-and-bubble-detector/detector-v4-s_int8.onnx",
+    "backend": "onnxruntime-cpu",
+    "conf": 0.3
+  },
+  "ocr": {
+    "model": "kha-white/manga-ocr-base",
+    "device": "gpu"
+  },
+  "regions": [
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.8159641027450562,
+      "text": "Õàâµ░ùÒüğÒüÖÒüï´╝şÒüôÒéôÒü½ÒüíÒü»´╝ü",
+      "ocr_ms": 139,
+      "bbox": [
+        122,
+        121,
+        316,
+        327
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7776765823364258,
+      "text": "Õàâµ░ùÒüğÒüÖÒéêÒÇüÒÇîÒü»ÒüäÒÇü",
+      "ocr_ms": 128,
+      "bbox": [
+        484,
+        127,
+        673,
+        305
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7811267375946045,
+      "text": "ÒüØÒéôÒü¬ÒüôÒü¿ÒüîÒÇîÒü¥ÒüòÒüï´╝Ä´╝Ä´╝Ä",
+      "ocr_ms": 161,
+      "bbox": [
+        477,
+        477,
+        673,
+        682
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7732895016670227,
+      "text": "ÕñğÖ║×ĞïÒüá´╝üÒüÖÒüöÒüä´╝ü",
+      "ocr_ms": 111,
+      "bbox": [
+        114,
+        494,
+        322,
+        680
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.8059626817703247,
+      "text": "×íîÒüôÒüåÒü¿ÒÇüÒüØÒéîÒüğÒü»ÒÇü",
+      "ocr_ms": 123,
+      "bbox": [
+        116,
+        837,
+        330,
+        1036
+      ]
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.8465373516082764,
+      "text": "ÕğïÒü¥Òéïë®×¬ŞÒüî┐îµ£ØÒÇü",
+      "ocr_ms": 105,
+      "bbox": [
+        480,
+        868,
+        609,
+        996
+      ]
+    }
+  ]
+}

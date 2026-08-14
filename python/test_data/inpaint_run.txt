@@ -1,0 +1,478 @@
+﻿Gorsel: test_data\manga_test.png (800x1130)
+Bolge girdisi: 6 metin, 0 balon
+Manuel bolge eklendi: 1
+Tespit modeli indiriliyor (https://huggingface.co/ogkalu/comic-text-and-bubble-detector/resolve/main/detector-v4-s_int8.onnx) ...
+Tespit modeli y├╝klendi: detector-v4-s_int8.onnx (11.1 MB, CPU)
+Balon tespiti (yerinde): 12 bolge (155 ms)
+Balon korumasi uygulandi (margin %8, ring 10px)
+Maske: 287041 px (31.75% sayfa, 9 ms)
+Maske kaydedildi: test_data\manga_test_mask.png
+--- Yontem: opencv ---
+Kalinti aritma: maske icinde koyu piksel 10255 -> 1748
+Kaydedildi: test_data\manga_test_inpaint_opencv.png  (0.3 s dahil model yukleme)
+  [text_bubble] ink 0.049 -> 0.006  (balon icinde temizlik mean=248 std=20.7)
+  [text_bubble] ink 0.037 -> 0.002  (balon icinde temizlik mean=251 std=13.1)
+  [text_bubble] ink 0.037 -> 0.003  (balon icinde temizlik mean=251 std=15.7)
+  [text_bubble] ink 0.035 -> 0.000  (balon icinde temizlik mean=252 std=9.3)
+  [text_bubble] ink 0.058 -> 0.003  (balon icinde temizlik mean=243 std=23.4)
+  [text_bubble] ink 0.058 -> 0.000  (balon icinde temizlik mean=244 std=19.0)
+  [text_free] ink 0.071 -> 0.023  (balon icinde temizlik mean=236 std=41.6)
+--- Yontem: lama ---
+LaMa modeli yuklendi (0.7 s, cihaz: cuda)
+LaMa inference: 1059 ms
+Kalinti aritma: maske icinde koyu piksel 4533 -> 418
+Kaydedildi: test_data\manga_test_inpaint_lama.png  (3.3 s dahil model yukleme)
+  [text_bubble] ink 0.049 -> 0.001  (balon icinde temizlik mean=254 std=5.9)
+  [text_bubble] ink 0.037 -> 0.000  (balon icinde temizlik mean=254 std=0.3)
+  [text_bubble] ink 0.037 -> 0.000  (balon icinde temizlik mean=254 std=4.9)
+  [text_bubble] ink 0.035 -> 0.000  (balon icinde temizlik mean=254 std=0.2)
+  [text_bubble] ink 0.058 -> 0.000  (balon icinde temizlik mean=254 std=3.6)
+  [text_bubble] ink 0.058 -> 0.000  (balon icinde temizlik mean=254 std=0.1)
+  [text_free] ink 0.071 -> 0.016  (balon icinde temizlik mean=250 std=31.9)
+Karsilastirma kaydedildi: test_data\manga_test_compare.png
+Bolge detaylari kaydedildi: test_data\manga_test_regions_compare.png
+
+{
+  "image": "test_data\\manga_test.png",
+  "method": "both",
+  "mask": {
+    "dilate": 4,
+    "bubble_guard": true,
+    "bubble_margin": 0.08,
+    "feather": 0,
+    "covered_px": 287041,
+    "covered_frac": 0.3175
+  },
+  "timings_ms": {
+    "opencv": 259.6,
+    "lama": 3294.3
+  },
+  "model": {
+    "opencv": "cv2.inpaint(telea)",
+    "lama": {
+      "package": "simple-lama-inpainting (Apache-2.0, PyPI)",
+      "checkpoint": "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt",
+      "device": "auto"
+    }
+  },
+  "regions": [
+    {
+      "bbox": [
+        122,
+        121,
+        316,
+        327
+      ],
+      "label_name": "text_bubble",
+      "text": "├ò├á├ó┬ÁÔûæ├╣├Æ├╝─ş├Æ├╝├û├Æ├╝├»┬┤ÔòØ┼ş├Æ├╝├┤├Æ├®├┤├Æ├╝┬¢├Æ├╝├¡├Æ├╝┬╗┬┤ÔòØ├╝",
+      "opencv": {
+        "index": 0,
+        "bbox": [
+          122,
+          121,
+          316,
+          327
+        ],
+        "label_name": "text_bubble",
+        "text": "├ò├á├ó┬ÁÔûæ├╣├Æ├╝─ş├Æ├╝├û├Æ├╝├»┬┤ÔòØ┼ş├Æ├╝├┤├Æ├®├┤├Æ├╝┬¢├Æ├╝├¡├Æ├╝┬╗┬┤ÔòØ├╝",
+        "ink_before": 0.0485,
+        "ink_after": 0.0057,
+        "clean_mean": 248.3,
+        "clean_std": 20.74
+      },
+      "lama": {
+        "index": 0,
+        "bbox": [
+          122,
+          121,
+          316,
+          327
+        ],
+        "label_name": "text_bubble",
+        "text": "├ò├á├ó┬ÁÔûæ├╣├Æ├╝─ş├Æ├╝├û├Æ├╝├»┬┤ÔòØ┼ş├Æ├╝├┤├Æ├®├┤├Æ├╝┬¢├Æ├╝├¡├Æ├╝┬╗┬┤ÔòØ├╝",
+        "ink_before": 0.0485,
+        "ink_after": 0.0007,
+        "clean_mean": 253.8,
+        "clean_std": 5.93
+      }
+    },
+    {
+      "bbox": [
+        484,
+        127,
+        673,
+        305
+      ],
+      "label_name": "text_bubble",
+      "text": "├ò├á├ó┬ÁÔûæ├╣├Æ├╝─ş├Æ├╝├û├Æ├®├¬├Æ├ç├╝├Æ├ç├«├Æ├╝┬╗├Æ├╝├ñ├Æ├ç├╝",
+      "opencv": {
+        "index": 1,
+        "bbox": [
+          484,
+          127,
+          673,
+          305
+        ],
+        "label_name": "text_bubble",
+        "text": "├ò├á├ó┬ÁÔûæ├╣├Æ├╝─ş├Æ├╝├û├Æ├®├¬├Æ├ç├╝├Æ├ç├«├Æ├╝┬╗├Æ├╝├ñ├Æ├ç├╝",
+        "ink_before": 0.037,
+        "ink_after": 0.0018,
+        "clean_mean": 250.9,
+        "clean_std": 13.13
+      },
+      "lama": {
+        "index": 1,
+        "bbox": [
+          484,
+          127,
+          673,
+          305
+        ],
+        "label_name": "text_bubble",
+        "text": "├ò├á├ó┬ÁÔûæ├╣├Æ├╝─ş├Æ├╝├û├Æ├®├¬├Æ├ç├╝├Æ├ç├«├Æ├╝┬╗├Æ├╝├ñ├Æ├ç├╝",
+        "ink_before": 0.037,
+        "ink_after": 0.0,
+        "clean_mean": 254.0,
+        "clean_std": 0.31
+      }
+    },
+    {
+      "bbox": [
+        477,
+        477,
+        673,
+        682
+      ],
+      "label_name": "text_bubble",
+      "text": "├Æ├╝├İ├Æ├®├┤├Æ├╝┬¼├Æ├╝├┤├Æ├╝┬┐├Æ├╝├«├Æ├ç├«├Æ├╝┬Ñ├Æ├╝├▓├Æ├╝├»┬┤ÔòØ├ä┬┤ÔòØ├ä┬┤ÔòØ├ä",
+      "opencv": {
+        "index": 2,
+        "bbox": [
+          477,
+          477,
+          673,
+          682
+        ],
+        "label_name": "text_bubble",
+        "text": "├Æ├╝├İ├Æ├®├┤├Æ├╝┬¼├Æ├╝├┤├Æ├╝┬┐├Æ├╝├«├Æ├ç├«├Æ├╝┬Ñ├Æ├╝├▓├Æ├╝├»┬┤ÔòØ├ä┬┤ÔòØ├ä┬┤ÔòØ├ä",
+        "ink_before": 0.0372,
+        "ink_after": 0.0034,
+        "clean_mean": 251.1,
+        "clean_std": 15.69
+      },
+      "lama": {
+        "index": 2,
+        "bbox": [
+          477,
+          477,
+          673,
+          682
+        ],
+        "label_name": "text_bubble",
+        "text": "├Æ├╝├İ├Æ├®├┤├Æ├╝┬¼├Æ├╝├┤├Æ├╝┬┐├Æ├╝├«├Æ├ç├«├Æ├╝┬Ñ├Æ├╝├▓├Æ├╝├»┬┤ÔòØ├ä┬┤ÔòØ├ä┬┤ÔòØ├ä",
+        "ink_before": 0.0372,
+        "ink_after": 0.0004,
+        "clean_mean": 253.8,
+        "clean_std": 4.88
+      }
+    },
+    {
+      "bbox": [
+        114,
+        494,
+        322,
+        680
+      ],
+      "label_name": "text_bubble",
+      "text": "├ò├▒─ş´ó╝├ûÔòæ├ù─Ş├»├Æ├╝├í┬┤ÔòØ├╝├Æ├╝├û├Æ├╝├Â├Æ├╝├ñ┬┤ÔòØ├╝",
+      "opencv": {
+        "index": 3,
+        "bbox": [
+          114,
+          494,
+          322,
+          680
+        ],
+        "label_name": "text_bubble",
+        "text": "├ò├▒─ş´ó╝├ûÔòæ├ù─Ş├»├Æ├╝├í┬┤ÔòØ├╝├Æ├╝├û├Æ├╝├Â├Æ├╝├ñ┬┤ÔòØ├╝",
+        "ink_before": 0.0347,
+        "ink_after": 0.0004,
+        "clean_mean": 252.0,
+        "clean_std": 9.28
+      },
+      "lama": {
+        "index": 3,
+        "bbox": [
+          114,
+          494,
+          322,
+          680
+        ],
+        "label_name": "text_bubble",
+        "text": "├ò├▒─ş´ó╝├ûÔòæ├ù─Ş├»├Æ├╝├í┬┤ÔòØ├╝├Æ├╝├û├Æ├╝├Â├Æ├╝├ñ┬┤ÔòØ├╝",
+        "ink_before": 0.0347,
+        "ink_after": 0.0,
+        "clean_mean": 254.0,
+        "clean_std": 0.18
+      }
+    },
+    {
+      "bbox": [
+        116,
+        837,
+        330,
+        1036
+      ],
+      "label_name": "text_bubble",
+      "text": "├ù├¡├«├Æ├╝├┤├Æ├╝├Ñ├Æ├╝┬┐├Æ├ç├╝├Æ├╝├İ├Æ├®├«├Æ├╝─ş├Æ├╝┬╗├Æ├ç├╝",
+      "opencv": {
+        "index": 4,
+        "bbox": [
+          116,
+          837,
+          330,
+          1036
+        ],
+        "label_name": "text_bubble",
+        "text": "├ù├¡├«├Æ├╝├┤├Æ├╝├Ñ├Æ├╝┬┐├Æ├ç├╝├Æ├╝├İ├Æ├®├«├Æ├╝─ş├Æ├╝┬╗├Æ├ç├╝",
+        "ink_before": 0.058,
+        "ink_after": 0.0027,
+        "clean_mean": 242.9,
+        "clean_std": 23.4
+      },
+      "lama": {
+        "index": 4,
+        "bbox": [
+          116,
+          837,
+          330,
+          1036
+        ],
+        "label_name": "text_bubble",
+        "text": "├ù├¡├«├Æ├╝├┤├Æ├╝├Ñ├Æ├╝┬┐├Æ├ç├╝├Æ├╝├İ├Æ├®├«├Æ├╝─ş├Æ├╝┬╗├Æ├ç├╝",
+        "ink_before": 0.058,
+        "ink_after": 0.0001,
+        "clean_mean": 253.8,
+        "clean_std": 3.57
+      }
+    },
+    {
+      "bbox": [
+        480,
+        868,
+        609,
+        996
+      ],
+      "label_name": "text_bubble",
+      "text": "├ò─ş├»├Æ├╝┬Ñ├Æ├®├»´ó╝├½┬«├ù┬¼┼Ş├Æ├╝├«´ó╝ÔöÉ├«┬Á┬ú├İ├Æ├ç├╝",
+      "opencv": {
+        "index": 5,
+        "bbox": [
+          480,
+          868,
+          609,
+          996
+        ],
+        "label_name": "text_bubble",
+        "text": "├ò─ş├»├Æ├╝┬Ñ├Æ├®├»´ó╝├½┬«├ù┬¼┼Ş├Æ├╝├«´ó╝ÔöÉ├«┬Á┬ú├İ├Æ├ç├╝",
+        "ink_before": 0.0575,
+        "ink_after": 0.0,
+        "clean_mean": 244.4,
+        "clean_std": 18.96
+      },
+      "lama": {
+        "index": 5,
+        "bbox": [
+          480,
+          868,
+          609,
+          996
+        ],
+        "label_name": "text_bubble",
+        "text": "├ò─ş├»├Æ├╝┬Ñ├Æ├®├»´ó╝├½┬«├ù┬¼┼Ş├Æ├╝├«´ó╝ÔöÉ├«┬Á┬ú├İ├Æ├ç├╝",
+        "ink_before": 0.0575,
+        "ink_after": 0.0,
+        "clean_mean": 254.0,
+        "clean_std": 0.08
+      }
+    },
+    {
+      "bbox": [
+        100,
+        903,
+        540,
+        1127
+      ],
+      "label_name": "text_free",
+      "text": "(manual)",
+      "opencv": {
+        "index": 6,
+        "bbox": [
+          100,
+          903,
+          540,
+          1127
+        ],
+        "label_name": "text_free",
+        "text": "(manual)",
+        "ink_before": 0.071,
+        "ink_after": 0.0229,
+        "clean_mean": 235.5,
+        "clean_std": 41.57
+      },
+      "lama": {
+        "index": 6,
+        "bbox": [
+          100,
+          903,
+          540,
+          1127
+        ],
+        "label_name": "text_free",
+        "text": "(manual)",
+        "ink_before": 0.071,
+        "ink_after": 0.0163,
+        "clean_mean": 249.6,
+        "clean_std": 31.94
+      }
+    }
+  ],
+  "bubble_borders": {
+    "opencv": [
+      {
+        "index": 0,
+        "bbox": [
+          65,
+          466,
+          374,
+          704
+        ],
+        "dark_before": 618,
+        "dark_after": 618
+      },
+      {
+        "index": 1,
+        "bbox": [
+          66,
+          108,
+          374,
+          341
+        ],
+        "dark_before": 595,
+        "dark_after": 595
+      },
+      {
+        "index": 2,
+        "bbox": [
+          426,
+          458,
+          736,
+          701
+        ],
+        "dark_before": 514,
+        "dark_after": 514
+      },
+      {
+        "index": 3,
+        "bbox": [
+          431,
+          105,
+          730,
+          324
+        ],
+        "dark_before": 551,
+        "dark_after": 551
+      },
+      {
+        "index": 4,
+        "bbox": [
+          464,
+          826,
+          627,
+          1024
+        ],
+        "dark_before": 1467,
+        "dark_after": 1467
+      },
+      {
+        "index": 5,
+        "bbox": [
+          62,
+          808,
+          381,
+          1053
+        ],
+        "dark_before": 1514,
+        "dark_after": 1514
+      }
+    ],
+    "lama": [
+      {
+        "index": 0,
+        "bbox": [
+          65,
+          466,
+          374,
+          704
+        ],
+        "dark_before": 618,
+        "dark_after": 618
+      },
+      {
+        "index": 1,
+        "bbox": [
+          66,
+          108,
+          374,
+          341
+        ],
+        "dark_before": 595,
+        "dark_after": 595
+      },
+      {
+        "index": 2,
+        "bbox": [
+          426,
+          458,
+          736,
+          701
+        ],
+        "dark_before": 514,
+        "dark_after": 514
+      },
+      {
+        "index": 3,
+        "bbox": [
+          431,
+          105,
+          730,
+          324
+        ],
+        "dark_before": 551,
+        "dark_after": 551
+      },
+      {
+        "index": 4,
+        "bbox": [
+          464,
+          826,
+          627,
+          1024
+        ],
+        "dark_before": 1467,
+        "dark_after": 1467
+      },
+      {
+        "index": 5,
+        "bbox": [
+          62,
+          808,
+          381,
+          1053
+        ],
+        "dark_before": 1514,
+        "dark_after": 1514
+      }
+    ]
+  }
+}
