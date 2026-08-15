@@ -36,6 +36,9 @@ $pyiArgs = @(
     "--distpath", $outDir,
     "--workpath", (Join-Path $projectRoot "python\build"),
     "--specpath", (Join-Path $projectRoot "python"),
+    "--collect-all", "manga_ocr",
+    "--collect-all", "unidic_lite",
+    "--add-data", (Join-Path $projectRoot "python\fonts;fonts"),
     $script
 )
 & $python -m PyInstaller @pyiArgs

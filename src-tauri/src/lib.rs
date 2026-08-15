@@ -270,11 +270,61 @@ fn python_status(state: tauri::State<'_, Arc<PyState>>) -> bool {
     state.stdin.lock().unwrap().is_some()
 }
 
+const IMAGE_EXTS: [&str; 6] = ["png", "jpg", "jpeg", "webp", "bmp", "gif"];
+
+/// Seçilen klasördeki görsel dosyaları sıralı döndürür (batch işleme için).
+#[tauri::command]
+fn list_images(dir: String) -> Result<Vec<String>, String> {
+    let entries = std::fs::read_dir(&dir).map_err(|e| format!("Klasör okunamadı: {e}"))?;
+    let mut out: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        if IMAGE_EXTS.contains(&ext.as_str()) {
+            out.push(path.to_string_lossy().to_string());
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Dosyayı hedef klasöre kopyalar (dışa aktarma). Aynı ad varsa üzerine yazar.
+#[tauri::command]
+fn copy_file(src: String, dst_dir: String) -> Result<String, String> {
+    let src_path = Path::new(&src);
+    let name = src_path
+        .file_name()
+        .ok_or_else(|| "Kaynak dosya adı alınamadı".to_string())?;
+    let dst = Path::new(&dst_dir).join(name);
+    std::fs::copy(src_path, &dst).map_err(|e| format!("Dosya kopyalanamadı: {e}"))?;
+    Ok(dst.to_string_lossy().to_string())
+}
+
+/// Metin dosyası yazar (ör. dışa aktarmada sonuç JSON'u).
+#[tauri::command]
+fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("Dosya yazılamadı: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![python_request, python_status])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            python_request,
+            python_status,
+            list_images,
+            copy_file,
+            write_text_file
+        ])
         .setup(|app| {
             let state = Arc::new(PyState::new());
             app.manage(state.clone());

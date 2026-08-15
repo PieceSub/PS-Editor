@@ -8,23 +8,120 @@
   <body>
     <main id="app">
       <header>
-        <h1>PS Editor</h1>
-        <p class="subtitle">PieceSub - Manga &amp; Anime Çeviri Aracı</p>
+        <div class="brand">
+          <h1>PS Editor</h1>
+          <p class="subtitle">PieceSub · Manga &amp; Anime Çeviri Aracı</p>
+        </div>
         <div id="sidecar-status" class="badge unknown">Python servisi bağlanıyor…</div>
       </header>
 
-      <section class="card">
-        <h2>Python Sidecar İletişimi</h2>
-        <p>
-          Tauri, Python servisini uygulama açılışında sidecar olarak başlatır.
-          İletişim <code>stdin/stdout</code> üzerinden JSON satırları (JSON Lines) ile yapılır.
-        </p>
-        <div class="row">
-          <button id="btn-hello">Merhaba de</button>
-          <button id="btn-cuda">CUDA / GPU Denetimi</button>
-        </div>
-        <pre id="output" class="output">—</pre>
-      </section>
+      <div id="banner" class="banner hidden" role="alert">
+        <span id="banner-text"></span>
+        <button id="banner-close" class="icon-btn" title="Kapat" aria-label="Kapat">×</button>
+      </div>
+
+      <div class="app-grid">
+        <aside class="rail">
+          <section class="card config-card">
+            <div class="card-head">
+              <h2>Kaynak</h2>
+            </div>
+            <p class="hint">Tek bir manga sayfası ya da sayfalar içeren bir klasör seçin.</p>
+            <div class="row">
+              <button id="btn-pick-file" class="btn secondary">Dosya Seç</button>
+              <button id="btn-pick-folder" class="btn secondary">Klasör Seç</button>
+            </div>
+            <div id="source-info" class="source-info hidden"></div>
+
+            <hr class="divider" />
+
+            <div class="card-head">
+              <h2>Çeviri ayarları</h2>
+            </div>
+
+            <div class="field">
+              <label class="field-label">İşlem modu</label>
+              <div class="segmented" id="mode-group" role="radiogroup" aria-label="İşlem modu">
+                <button class="seg active" data-mode="auto" role="radio" aria-checked="true" type="button">Otomatik</button>
+                <button class="seg" data-mode="local" role="radio" aria-checked="false" type="button">Yerel</button>
+                <button class="seg" data-mode="api" role="radio" aria-checked="false" type="button">API</button>
+              </div>
+              <p class="hint" id="mode-hint"></p>
+            </div>
+
+            <div class="field" id="provider-field">
+              <label class="field-label" for="provider-select">Sağlayıcı</label>
+              <select id="provider-select"></select>
+              <p class="hint" id="provider-hint"></p>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="lang-select">Hedef dil</label>
+              <select id="lang-select">
+                <option value="en">İngilizce</option>
+                <option value="tr">Türkçe</option>
+                <option value="ja">Japonca</option>
+                <option value="ko">Korece</option>
+                <option value="es">İspanyolca</option>
+                <option value="de">Almanca</option>
+                <option value="fr">Fransızca</option>
+                <option value="pt">Portekizce</option>
+                <option value="id">Endonezce</option>
+                <option value="vi">Vietnamca</option>
+                <option value="ru">Rusça</option>
+                <option value="zh">Çince</option>
+              </select>
+            </div>
+
+            <div class="row start-row">
+              <button id="btn-start" class="btn primary" disabled>İşlemeyi Başlat</button>
+              <button id="btn-cancel" class="btn ghost hidden">İptal</button>
+            </div>
+          </section>
+
+          <section id="progress-card" class="card hidden">
+            <div class="card-head">
+              <h2>İşleniyor…</h2>
+              <span id="progress-count" class="muted"></span>
+            </div>
+            <div class="bar-wrap">
+              <div class="bar" id="overall-bar"><div class="fill" id="overall-fill"></div></div>
+            </div>
+            <p class="hint" id="overall-hint"></p>
+            <div class="bar-row">
+              <div class="bar current" id="page-bar"><div class="fill" id="page-fill"></div></div>
+              <span id="page-pct" class="pct">%0</span>
+            </div>
+            <p class="stage" id="stage-label">Hazırlanıyor…</p>
+            <p class="hint" id="stage-detail"></p>
+          </section>
+        </aside>
+
+        <section id="results-card" class="card hidden">
+          <div class="card-head results-head">
+            <div>
+              <h2>Sonuçlar</h2>
+              <p id="result-summary" class="hint"></p>
+            </div>
+            <div class="toolbar">
+              <div class="segmented small" id="view-mode-group" role="radiogroup" aria-label="Görüntüleme modu">
+                <button class="seg active" data-view="compare" role="radio" aria-checked="true" type="button">Karşılaştır</button>
+                <button class="seg" data-view="side" role="radio" aria-checked="false" type="button">Yan Yana</button>
+              </div>
+              <button id="btn-overflow" class="btn chip active" type="button">Taşmalar</button>
+              <button id="btn-export" class="btn secondary" type="button">Dışa Aktar…</button>
+            </div>
+          </div>
+
+          <div id="overflow-warning" class="warn-box hidden"></div>
+
+          <p id="page-meta" class="hint page-meta hidden"></p>
+
+          <div id="viewer" class="viewer"></div>
+
+          <div id="thumbs" class="thumbs hidden"></div>
+        </section>
+      </div>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

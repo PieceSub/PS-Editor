@@ -192,7 +192,7 @@ def cmd_translate_page(payload: dict) -> dict:
     except Exception as exc:  # noqa: BLE001 - bilinmeyenler de kullanici dostu olsun
         err = build_user_error(exc)
         emit({"name": "error", "progress": 1.0, "message": err["message"],
-              "data": {"code": err["code"]}})
+              "data": {"code": err["code"], "debug": f"{type(exc).__name__}: {exc}"}})
         raise SidecarError(err["message"]) from exc
 
 

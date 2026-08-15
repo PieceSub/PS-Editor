@@ -13,13 +13,22 @@
     "windows": [
       {
         "title": "PS Editor",
-        "width": 900,
-        "height": 680,
+        "width": 1180,
+        "height": 820,
+        "minWidth": 860,
+        "minHeight": 600,
         "resizable": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "requireLiteralLeadingDot": false,
+          "allow": ["**/*"]
+        }
+      }
     }
   },
   "bundle": {
