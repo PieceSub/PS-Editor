@@ -9,9 +9,19 @@
 # Notlar:
 # - transformers <5 zorunludur: manga-ocr 0.1.14, transformers 5.x ile
 #   tokenizer yüklemesinde bozulur (yukarı akışta düzeltildi, burada pin'lenmiştir).
-# - torch: Windows PyPI wheel'i CUDA desteklidir (RTX 4060 otomatik bulunur).
-#   Açık bir CUDA sürümü kurmak isterseniz:
-#   pip install torch --index-url https://download.pytorch.org/whl/cu126
+# - torch: PyPI'deki `torch` wheel'i platforma göre farklıdır (torch 2.x):
+#   * Linux: varsayılan olarak CUDA destekli build gelir (2.13.0 = +cu130;
+#     nvidia-*/cuda-toolkit bağımlılıklarını çeker, ~3 GB). NVIDIA GPU varsa
+#     kurulum sonrası torch.cuda.is_available() True olur.
+#   * Windows: varsayılan build CPU-only'dır (CUDA bağımlılıkları wheel
+#     METADATA'sında yalnızca platform_system=="Linux" ile işaretlidir).
+#     Windows'ta CUDA istiyorsanız indeksi açıkça verin (paket adı aynıdır):
+#       pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+#     (sürüme göre cu128/cu130/cu132 de olabilir; ikisini aynı indeksten ve
+#     aynı komutta kurmak gerekir ki torch/torchvision sürümleri eşleşsin).
+#   * macOS: CUDA build'i yayımlanmaz; MPS (Metal) PyPI'dan gelir.
+#   CUDA istemiyorsanız (ör. CPU-only Linux):
+#     pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 # - onnxruntime yalnızca CPU içindir (tespit modeli CPU'da çalışır; ağır
 #   yük olan OCR, PyTorch üzerinden GPU'ya gider).
 # - opencv (cv2) ayrıca listelenmez: simple-lama-inpainting onu bağımlılık

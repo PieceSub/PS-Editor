@@ -8,8 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "setup:python": "powershell -ExecutionPolicy Bypass -File scripts/setup-python.ps1",
-    "sidecar:build": "powershell -ExecutionPolicy Bypass -File scripts/build-sidecar.ps1"
+    "setup:python": "node scripts/run-platform.mjs setup-python",
+    "sidecar:build": "node scripts/run-platform.mjs build-sidecar"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
