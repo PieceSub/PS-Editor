@@ -123,7 +123,14 @@ fn spawn_python(app: &AppHandle, state: &Arc<PyState>) -> Result<(), String> {
     }
 
     // 1) Üretim: bundle.externalBin -> src-tauri/binaries/python-sidecar-<triple>.exe
-    if let Ok(command) = app.shell().sidecar("python-sidecar") {
+    if let Ok(command) = app
+        .shell()
+        // Konsol kod sayfasına (chcp) bağımlı kalmadan UTF-8 zorla:
+        // PYTHONIOENCODING stdin/stdout/stderr'ı geleceğe dönük olarak
+        // UTF-8'e sabitler, PYTHONUTF8 ise PEP 540 UTF-8 modunu açar.
+        .sidecar("python-sidecar")
+        .map(|cmd| cmd.env("PYTHONIOENCODING", "utf-8").env("PYTHONUTF8", "1"))
+    {
         match command.spawn() {
             Ok((mut rx, child)) => {
                 state.attach(PyProcess::Shell { child });
@@ -183,6 +190,11 @@ fn spawn_python_dev(app: &AppHandle, state: &Arc<PyState>) -> Result<(), String>
     let mut child = std::process::Command::new(&python)
         .arg(&script)
         .env("PYTHONUNBUFFERED", "1")
+        // Unicode yollar için stdin/stdout UTF-8'e sabitlenmeli; aksi halde
+        // Windows ANSI kod sayfası (cp125x) devreye girip UTF-8 baytlarını
+        // bozar (ör. "Masaüstü" -> "MasaÃ¼stÃ¼").
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

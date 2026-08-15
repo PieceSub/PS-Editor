@@ -273,12 +273,17 @@ def main() -> int:
     # aç. prototiplerdeki ensure_utf8_stdout ile aynı felsefe: stderr de
     # (manga-ocr/logging Japangıa yazabilir) UTF-8 + errors=replace olmadan
     # cp1254 gibi kodlamalarda UnicodeEncodeError fırlatılabilir.
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace",
-                           line_buffering=True)
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:  # noqa: BLE001
-        pass
+    # stdin DE dahil üç akış da UTF-8'e sabitlenir. Kritik: Windows'ta pipe
+    # olmayan bir akış için varsayılan kodlama ANSI kod sayfasıdır (cp125x);
+    # Rust tarafı stdin'e her zaman ham UTF-8 baytları yazar (serde_json
+    # ASCII kaçışı yapmaz), bu baytlar cp1252/cp1254 ile çözülürse "ü" ->
+    # "Ã¼" mojibake olur ve Türkçe karakterli dosya yolları bulunamaz.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace",
+                               line_buffering=True)
+        except Exception:  # noqa: BLE001 - sözlük/consol gibi akışlar değişemez
+            pass
     write_message({"event": "ready", "payload": {"version": "0.2.0"}})
 
     for line in sys.stdin:
