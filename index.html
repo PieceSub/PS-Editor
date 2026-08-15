@@ -12,7 +12,10 @@
           <h1>PS Editor</h1>
           <p class="subtitle">PieceSub · Manga &amp; Anime Çeviri Aracı</p>
         </div>
-        <div id="sidecar-status" class="badge unknown">Python servisi bağlanıyor…</div>
+        <div class="header-right">
+          <div id="saved-indicator" class="saved-indicator idle" title="Kayıt durumu">Kaydedilmedi</div>
+          <div id="sidecar-status" class="badge unknown">Python servisi bağlanıyor…</div>
+        </div>
       </header>
 
       <div id="banner" class="banner hidden" role="alert">
@@ -20,87 +23,39 @@
         <button id="banner-close" class="icon-btn" title="Kapat" aria-label="Kapat">×</button>
       </div>
 
-      <div class="app-grid">
-        <aside class="rail">
-          <section class="card config-card">
-            <div class="card-head">
-              <h2>Kaynak</h2>
-            </div>
-            <p class="hint">Tek bir manga sayfası ya da sayfalar içeren bir klasör seçin.</p>
-            <div class="row">
-              <button id="btn-pick-file" class="btn secondary">Dosya Seç</button>
-              <button id="btn-pick-folder" class="btn secondary">Klasör Seç</button>
-            </div>
-            <div id="source-info" class="source-info hidden"></div>
+      <nav class="tabs" role="tablist" aria-label="Ana görünümler">
+        <button id="tab-mangas" class="tab active" role="tab" aria-selected="true" type="button">Mangalar</button>
+        <button id="tab-editor" class="tab" role="tab" aria-selected="false" type="button">Editör</button>
+      </nav>
 
-            <hr class="divider" />
+      <!-- ------------------------- Mangalar sekmesi ------------------------- -->
 
-            <div class="card-head">
-              <h2>Çeviri ayarları</h2>
-            </div>
+      <section id="mangas-view" class="view">
+        <div class="projects-head">
+          <div>
+            <h2>Mangalar</h2>
+            <p class="hint">Projeleriniz bu bilgisayarda saklanır. Bir projeye tıklayıp kaldığınız yerden devam edin.</p>
+          </div>
+          <button id="btn-new-project" class="btn primary" type="button">+ Yeni çeviri ekle</button>
+        </div>
+        <div id="project-grid" class="project-grid"></div>
+        <p id="projects-empty" class="hint projects-empty hidden">
+          Henüz proje yok. Sağ üstteki "+ Yeni çeviri ekle" ile ilk projenizi oluşturun.
+        </p>
+      </section>
 
-            <div class="field">
-              <label class="field-label">İşlem modu</label>
-              <div class="segmented" id="mode-group" role="radiogroup" aria-label="İşlem modu">
-                <button class="seg active" data-mode="auto" role="radio" aria-checked="true" type="button">Otomatik</button>
-                <button class="seg" data-mode="local" role="radio" aria-checked="false" type="button">Yerel</button>
-                <button class="seg" data-mode="api" role="radio" aria-checked="false" type="button">API</button>
-              </div>
-              <p class="hint" id="mode-hint"></p>
-            </div>
+      <!-- ------------------------- Editör sekmesi ------------------------- -->
 
-            <div class="field" id="provider-field">
-              <label class="field-label" for="provider-select">Sağlayıcı</label>
-              <select id="provider-select"></select>
-              <p class="hint" id="provider-hint"></p>
-            </div>
-
-            <div class="field">
-              <label class="field-label" for="lang-select">Hedef dil</label>
-              <select id="lang-select">
-                <option value="en">İngilizce</option>
-                <option value="tr">Türkçe</option>
-                <option value="ja">Japonca</option>
-                <option value="ko">Korece</option>
-                <option value="es">İspanyolca</option>
-                <option value="de">Almanca</option>
-                <option value="fr">Fransızca</option>
-                <option value="pt">Portekizce</option>
-                <option value="id">Endonezce</option>
-                <option value="vi">Vietnamca</option>
-                <option value="ru">Rusça</option>
-                <option value="zh">Çince</option>
-              </select>
-            </div>
-
-            <div class="row start-row">
-              <button id="btn-start" class="btn primary" disabled>İşlemeyi Başlat</button>
-              <button id="btn-cancel" class="btn ghost hidden">İptal</button>
-            </div>
-          </section>
-
-          <section id="progress-card" class="card hidden">
-            <div class="card-head">
-              <h2>İşleniyor…</h2>
-              <span id="progress-count" class="muted"></span>
-            </div>
-            <div class="bar-wrap">
-              <div class="bar" id="overall-bar"><div class="fill" id="overall-fill"></div></div>
-            </div>
-            <p class="hint" id="overall-hint"></p>
-            <div class="bar-row">
-              <div class="bar current" id="page-bar"><div class="fill" id="page-fill"></div></div>
-              <span id="page-pct" class="pct">%0</span>
-            </div>
-            <p class="stage" id="stage-label">Hazırlanıyor…</p>
-            <p class="hint" id="stage-detail"></p>
-          </section>
-        </aside>
+      <section id="editor-view" class="view hidden">
+        <div id="editor-empty" class="editor-empty hidden">
+          <p class="empty-title">Henüz bir proje açılmadı.</p>
+          <p class="hint">Mangalar sekmesinden bir proje seçin ya da "+ Yeni çeviri ekle" ile yeni bir çeviri başlatın.</p>
+        </div>
 
         <section id="results-card" class="card hidden">
           <div class="card-head results-head">
             <div>
-              <h2>Sonuçlar</h2>
+              <h2 id="results-title">Sonuçlar</h2>
               <p id="result-summary" class="hint"></p>
             </div>
             <div class="toolbar">
@@ -122,8 +77,115 @@
 
           <div id="thumbs" class="thumbs hidden"></div>
         </section>
-      </div>
+      </section>
     </main>
+
+    <!-- ------------------- Yeni çeviri ekle (modal) ------------------- -->
+
+    <div id="new-project-modal" class="modal hidden" aria-hidden="true">
+      <div id="modal-backdrop" class="modal-backdrop"></div>
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>Yeni çeviri ekle</h2>
+          <button id="modal-close" class="icon-btn" title="Kapat" aria-label="Kapat">×</button>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="project-name">Proje adı</label>
+          <input id="project-name" type="text" placeholder="örn. One Piece 1101 — Bölüm 5" />
+          <p class="hint">Boş bırakırsanız kaynak dosya/klasör adı kullanılır.</p>
+        </div>
+
+        <section class="card config-card">
+          <div class="card-head">
+            <h2>Kaynak</h2>
+          </div>
+          <p class="hint">Tek bir manga sayfası ya da sayfalar içeren bir klasör seçin.</p>
+          <div class="row">
+            <button id="btn-pick-file" class="btn secondary">Dosya Seç</button>
+            <button id="btn-pick-folder" class="btn secondary">Klasör Seç</button>
+          </div>
+          <div id="source-info" class="source-info hidden"></div>
+
+          <hr class="divider" />
+
+          <div class="card-head">
+            <h2>Çeviri ayarları</h2>
+          </div>
+
+          <div class="field">
+            <label class="field-label">İşlem modu</label>
+            <div class="segmented" id="mode-group" role="radiogroup" aria-label="İşlem modu">
+              <button class="seg active" data-mode="auto" role="radio" aria-checked="true" type="button">Otomatik</button>
+              <button class="seg" data-mode="local" role="radio" aria-checked="false" type="button">Yerel</button>
+              <button class="seg" data-mode="api" role="radio" aria-checked="false" type="button">API</button>
+            </div>
+            <p class="hint" id="mode-hint"></p>
+          </div>
+
+          <div class="field" id="provider-field">
+            <label class="field-label" for="provider-select">Sağlayıcı</label>
+            <select id="provider-select"></select>
+            <p class="hint" id="provider-hint"></p>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="lang-select">Hedef dil</label>
+            <select id="lang-select">
+              <option value="en">İngilizce</option>
+              <option value="tr">Türkçe</option>
+              <option value="ja">Japonca</option>
+              <option value="ko">Korece</option>
+              <option value="es">İspanyolca</option>
+              <option value="de">Almanca</option>
+              <option value="fr">Fransızca</option>
+              <option value="pt">Portekizce</option>
+              <option value="id">Endonezce</option>
+              <option value="vi">Vietnamca</option>
+              <option value="ru">Rusça</option>
+              <option value="zh">Çince</option>
+            </select>
+          </div>
+
+          <div class="row start-row">
+            <button id="btn-start" class="btn primary" disabled>İşlemeyi Başlat</button>
+            <button id="btn-cancel" class="btn ghost hidden">İptal</button>
+          </div>
+        </section>
+
+        <section id="progress-card" class="card hidden">
+          <div class="card-head">
+            <h2>İşleniyor…</h2>
+            <span id="progress-count" class="muted"></span>
+          </div>
+          <div class="bar-wrap">
+            <div class="bar" id="overall-bar"><div class="fill" id="overall-fill"></div></div>
+          </div>
+          <p class="hint" id="overall-hint"></p>
+          <div class="bar-row">
+            <div class="bar current" id="page-bar"><div class="fill" id="page-fill"></div></div>
+            <span id="page-pct" class="pct">%0</span>
+          </div>
+          <p class="stage" id="stage-label">Hazırlanıyor…</p>
+          <p class="hint" id="stage-detail"></p>
+        </section>
+      </div>
+    </div>
+
+    <!-- ------------------------- Silme onayı (modal) ------------------------- -->
+
+    <div id="confirm-modal" class="modal hidden" aria-hidden="true">
+      <div id="confirm-backdrop" class="modal-backdrop"></div>
+      <div class="modal-card confirm-card">
+        <h2 id="confirm-title">Projeyi sil</h2>
+        <p id="confirm-message" class="hint"></p>
+        <div class="row confirm-row">
+          <button id="confirm-cancel" class="btn secondary" type="button">Vazgeç</button>
+          <button id="confirm-ok" class="btn danger" type="button">Sil</button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -12,6 +12,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+mod projects;
+
 /// Sidecar iletişim süpervizörü.
 ///
 /// Mimari karar: Tauri ile Python arasındaki iletişim, stdin/stdout üzerinden
@@ -335,7 +337,13 @@ pub fn run() {
             python_status,
             list_images,
             copy_file,
-            write_text_file
+            write_text_file,
+            projects::list_projects,
+            projects::create_project,
+            projects::project_add_page,
+            projects::save_project,
+            projects::open_project,
+            projects::delete_project
         ])
         .setup(|app| {
             let state = Arc::new(PyState::new());

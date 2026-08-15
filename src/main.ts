@@ -23,15 +23,70 @@ interface ProviderInfo {
   has_key: boolean;
 }
 
+/** Mangalar sekmesindeki proje kartı özeti (Rust list_projects). */
+interface ProjectSummary {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  source_type: string;
+  page_count: number;
+  thumb: string | null;
+}
+
+interface CreatedProject {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** project_add_page sonucu: görseller proje klasörüne kopyalanmış, mutlak yollar. */
+interface AddedPage {
+  index: number;
+  name: string;
+  source: string;
+  result: PageResult;
+}
+
+/** project.json manifest meta kısmı (ön yüzün autosave'de gönderdiği). */
+interface ManifestMeta {
+  id: string;
+  name: string;
+  created_at: string;
+  source_type: string;
+  provider_settings: { mode: Mode; provider: string; target_lang: string };
+}
+
+interface PersistedPage {
+  index: number;
+  name: string;
+  source: string;
+  result: PageResult;
+}
+
+interface ProjectManifest extends ManifestMeta {
+  schema_version?: number;
+  updated_at: string;
+  pages: PersistedPage[];
+}
+
 interface DonePage {
+  /** Görünen sayfa adı (kaynak dosya adı; dışa aktarma adı için de kullanılır). */
+  name: string;
   input: string;
   result: PageResult;
   /** Düzenleme sonrası görsel yenileme sürümü (cache-bust). */
   imgVer: number;
 }
 
+type TabId = "mangas" | "editor";
+
 const state = {
+  tab: "mangas" as TabId,
   pages: [] as string[],
+  sourcePath: null as string | null,
+  sourceType: "file" as "file" | "folder",
   sourceLabel: "",
   mode: "auto" as Mode,
   provider: "mock",
@@ -46,6 +101,12 @@ const state = {
   currentJob: "",
   editMode: false,
   selectedRegionId: null as number | null,
+  projects: [] as ProjectSummary[],
+  activeProject: null as { id: string; name: string } | null,
+  manifestMeta: null as ManifestMeta | null,
+  savedAt: null as number | null,
+  savedFlash: false,
+  saveBusy: false,
 };
 
 /** Elle eklenen bölgeler için benzersiz id'ler (otomatik id'lerle çakışmaz). */
@@ -76,9 +137,29 @@ const $ = <T extends HTMLElement>(id: string): T => {
 
 const els = {
   sidecarStatus: $<HTMLDivElement>("sidecar-status"),
+  savedIndicator: $<HTMLDivElement>("saved-indicator"),
   banner: $<HTMLDivElement>("banner"),
   bannerText: $<HTMLSpanElement>("banner-text"),
   bannerClose: $<HTMLButtonElement>("banner-close"),
+  tabMangas: $<HTMLButtonElement>("tab-mangas"),
+  tabEditor: $<HTMLButtonElement>("tab-editor"),
+  mangasView: $<HTMLElement>("mangas-view"),
+  editorView: $<HTMLElement>("editor-view"),
+  editorEmpty: $<HTMLElement>("editor-empty"),
+  projectGrid: $<HTMLDivElement>("project-grid"),
+  projectsEmpty: $<HTMLElement>("projects-empty"),
+  btnNewProject: $<HTMLButtonElement>("btn-new-project"),
+  resultsCard: $<HTMLElement>("results-card"),
+  resultsTitle: $<HTMLHeadingElement>("results-title"),
+  newProjectModal: $<HTMLDivElement>("new-project-modal"),
+  modalBackdrop: $<HTMLDivElement>("modal-backdrop"),
+  modalClose: $<HTMLButtonElement>("modal-close"),
+  projectName: $<HTMLInputElement>("project-name"),
+  confirmModal: $<HTMLDivElement>("confirm-modal"),
+  confirmTitle: $<HTMLHeadingElement>("confirm-title"),
+  confirmMessage: $<HTMLElement>("confirm-message"),
+  confirmOk: $<HTMLButtonElement>("confirm-ok"),
+  confirmCancel: $<HTMLButtonElement>("confirm-cancel"),
   btnPickFile: $<HTMLButtonElement>("btn-pick-file"),
   btnPickFolder: $<HTMLButtonElement>("btn-pick-folder"),
   sourceInfo: $<HTMLDivElement>("source-info"),
@@ -98,7 +179,6 @@ const els = {
   pagePct: $<HTMLSpanElement>("page-pct"),
   stageLabel: $<HTMLParagraphElement>("stage-label"),
   stageDetail: $<HTMLParagraphElement>("stage-detail"),
-  resultsCard: $<HTMLElement>("results-card"),
   resultSummary: $<HTMLParagraphElement>("result-summary"),
   pageMeta: $<HTMLParagraphElement>("page-meta"),
   viewer: $<HTMLDivElement>("viewer"),
@@ -118,6 +198,18 @@ function basename(path: string): string {
 
 function stripExt(name: string): string {
   return name.replace(/\.[^.]+$/, "");
+}
+
+/** ISO zamanını kısa "GG.AA HH:MM" biçimine çevirir; bozuksa "—". */
+function fmtTime(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "—";
+  return d.toLocaleString("tr-TR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 async function request(cmd: string, payload?: unknown): Promise<unknown> {
@@ -146,6 +238,218 @@ function hideBanner(): void {
   els.banner.classList.add("hidden");
 }
 
+/* ------------------------------------------------------------- sekme yönetimi */
+
+function setTab(tab: TabId): void {
+  state.tab = tab;
+  const onMangas = tab === "mangas";
+  els.tabMangas.classList.toggle("active", onMangas);
+  els.tabEditor.classList.toggle("active", !onMangas);
+  els.tabMangas.setAttribute("aria-selected", String(onMangas));
+  els.tabEditor.setAttribute("aria-selected", String(!onMangas));
+  els.mangasView.classList.toggle("hidden", !onMangas);
+  els.editorView.classList.toggle("hidden", onMangas);
+  if (!onMangas) {
+    // Bellekteki veri zaten güncel; yalnızca boş durumu senkronla.
+    const hasPages = state.done.length > 0;
+    els.editorEmpty.classList.toggle("hidden", hasPages);
+    els.resultsCard.classList.toggle("hidden", !hasPages);
+  }
+}
+
+/* ------------------------------------------------------- proje listesi (Mangalar) */
+
+function renderSavedIndicator(): void {
+  const base = "saved-indicator";
+  if (!state.activeProject || !state.savedAt) {
+    els.savedIndicator.textContent = "Kaydedilmedi";
+    els.savedIndicator.className = `${base} dim`;
+    els.savedIndicator.title = "Henüz bir proje açık değil";
+    return;
+  }
+  const time = new Date(state.savedAt).toLocaleTimeString("tr-TR");
+  els.savedIndicator.textContent = state.savedFlash ? `Kaydedildi ${time}` : `Son kayıt ${time}`;
+  els.savedIndicator.className = `${base} ok`;
+  els.savedIndicator.title = `Son kayıt: ${new Date(state.savedAt).toLocaleString("tr-TR")}`;
+}
+
+async function refreshProjects(): Promise<void> {
+  try {
+    state.projects = (await invoke("list_projects")) as ProjectSummary[];
+  } catch (err) {
+    showBanner(`Proje listesi alınamadı: ${String(err)}`, "error");
+    state.projects = [];
+  }
+  renderProjects();
+}
+
+function renderProjects(): void {
+  els.projectGrid.replaceChildren();
+  els.projectsEmpty.classList.toggle("hidden", state.projects.length > 0);
+  for (const p of state.projects) {
+    const card = document.createElement("div");
+    card.className = "project-card";
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.title = `${p.name} — aç`;
+
+    let thumb: HTMLElement;
+    if (p.thumb) {
+      const img = document.createElement("img");
+      img.className = "project-thumb";
+      img.src = pageImageUrl(p.thumb);
+      img.alt = p.name;
+      img.loading = "lazy";
+      thumb = img;
+    } else {
+      thumb = document.createElement("div");
+      thumb.className = "project-thumb-placeholder";
+      thumb.textContent = "Önizleme yok";
+    }
+
+    const body = document.createElement("div");
+    body.className = "project-card-body";
+    const name = document.createElement("p");
+    name.className = "project-card-name";
+    name.textContent = p.name;
+    name.title = p.name;
+    const meta = document.createElement("p");
+    meta.className = "project-card-meta";
+    meta.textContent = `${p.page_count} sayfa işlendi · son düzenleme ${fmtTime(p.updated_at)}`;
+    body.append(name, meta);
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "project-delete";
+    del.textContent = "×";
+    del.title = "Projeyi sil";
+    del.setAttribute("aria-label", `${p.name} projesini sil`);
+    del.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      requestDeleteProject(p);
+    });
+
+    card.append(thumb, body, del);
+    card.addEventListener("click", () => void openProject(p.id));
+    card.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        void openProject(p.id);
+      }
+    });
+    els.projectGrid.appendChild(card);
+  }
+}
+
+async function openProject(id: string): Promise<void> {
+  try {
+    const manifest = (await invoke("open_project", { projectId: id })) as ProjectManifest;
+    state.activeProject = { id, name: manifest.name };
+    state.manifestMeta = {
+      id: manifest.id,
+      name: manifest.name,
+      created_at: manifest.created_at,
+      source_type: manifest.source_type,
+      provider_settings: manifest.provider_settings,
+    };
+    state.done = manifest.pages.map((pg) => ({
+      name: pg.name,
+      input: pg.source,
+      result: pg.result,
+      imgVer: 1,
+    }));
+    state.selected = 0;
+    state.editMode = false;
+    state.selectedRegionId = null;
+    const t = Date.parse(manifest.updated_at);
+    state.savedAt = Number.isFinite(t) ? t : Date.now();
+    state.savedFlash = false;
+    renderSavedIndicator();
+    els.resultsTitle.textContent = manifest.name;
+    els.editorEmpty.classList.toggle("hidden", state.done.length > 0);
+    els.resultsCard.classList.toggle("hidden", state.done.length === 0);
+    if (state.done.length) renderResults();
+    setTab("editor");
+  } catch (err) {
+    showBanner(`Proje açılamadı: ${String(err)}`, "error");
+  }
+}
+
+/* ------------------------------------------------------- proje silme (onaylı) */
+
+let confirmCallback: (() => void) | null = null;
+
+function requestDeleteProject(p: ProjectSummary): void {
+  confirmDialog(
+    "Projeyi sil",
+    `"${p.name}" projesi ve içindeki tüm sayfalar kalıcı olarak silinecek. Bu işlem geri alınamaz.`,
+    "Kalıcı Olarak Sil",
+    () => void deleteProject(p),
+  );
+}
+
+function confirmDialog(title: string, message: string, okLabel: string, onOk: () => void): void {
+  confirmCallback = onOk;
+  els.confirmTitle.textContent = title;
+  els.confirmMessage.textContent = message;
+  els.confirmOk.textContent = okLabel;
+  els.confirmModal.classList.remove("hidden");
+  els.confirmModal.setAttribute("aria-hidden", "false");
+}
+
+function closeConfirm(): void {
+  confirmCallback = null;
+  els.confirmModal.classList.add("hidden");
+  els.confirmModal.setAttribute("aria-hidden", "true");
+}
+
+async function deleteProject(p: ProjectSummary): Promise<void> {
+  try {
+    await invoke("delete_project", { projectId: p.id });
+    if (state.activeProject?.id === p.id) {
+      state.activeProject = null;
+      state.manifestMeta = null;
+      state.done = [];
+      state.savedAt = null;
+      renderSavedIndicator();
+      els.editorEmpty.classList.remove("hidden");
+      els.resultsCard.classList.add("hidden");
+    }
+    showBanner(`"${p.name}" silindi.`, "ok");
+    await refreshProjects();
+  } catch (err) {
+    showBanner(`Proje silinemedi: ${String(err)}`, "error");
+  }
+}
+
+/* ------------------------------------------------- "Yeni çeviri ekle" modalı */
+
+function openNewProjectModal(): void {
+  state.pages = [];
+  state.sourcePath = null;
+  els.sourceInfo.textContent = "";
+  els.sourceInfo.classList.add("hidden");
+  els.progressCard.classList.add("hidden");
+  els.projectName.value = "";
+  els.btnStart.disabled = true;
+  els.newProjectModal.classList.remove("hidden");
+  els.newProjectModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => els.btnPickFile.focus(), 0);
+}
+
+function closeNewProjectModal(): void {
+  if (state.running) return; // İşlem sürerken kapatılamaz.
+  els.newProjectModal.classList.add("hidden");
+  els.newProjectModal.setAttribute("aria-hidden", "true");
+}
+
+function defaultProjectName(): string {
+  if (!state.sourcePath) return "Yeni Proje";
+  return state.sourceType === "folder"
+    ? basename(state.sourcePath)
+    : stripExt(basename(state.sourcePath));
+}
+
 /* -------------------------------------------------------- kaynak seçimi */
 
 async function pickFile(): Promise<void> {
@@ -157,6 +461,8 @@ async function pickFile(): Promise<void> {
   if (!file) return;
   const path = Array.isArray(file) ? file[0] : file;
   state.pages = [path];
+  state.sourcePath = path;
+  state.sourceType = "file";
   state.sourceLabel = `Tek sayfa · ${basename(path)}`;
   showSourceInfo();
 }
@@ -170,6 +476,8 @@ async function pickFolder(): Promise<void> {
     showBanner("Seçilen klasörde görsel bulunamadı (PNG/JPG/WebP/BMP/GIF).", "warn");
   }
   state.pages = images;
+  state.sourcePath = folder;
+  state.sourceType = "folder";
   state.sourceLabel = `${images.length} sayfa · ${folder}`;
   showSourceInfo();
 }
@@ -286,6 +594,8 @@ function setRunning(running: boolean): void {
   els.btnPickFile.disabled = running;
   els.btnPickFolder.disabled = running;
   els.langSelect.disabled = running;
+  els.modalClose.disabled = running;
+  els.projectName.disabled = running;
   for (const btn of els.modeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
     btn.disabled = running;
   }
@@ -303,13 +613,43 @@ async function run(): Promise<void> {
   state.cancelRequested = false;
   hideBanner();
   setRunning(true);
-  els.resultsCard.classList.add("hidden");
   els.progressCard.classList.remove("hidden");
+  els.resultsCard.classList.add("hidden");
   els.overallFill.style.width = "0%";
   setPageProgress(0, stageLabel("started"), "Hazırlanıyor…");
 
   const lang = els.langSelect.value;
   const provider = state.mode === "local" ? "local" : state.provider;
+  const name = els.projectName.value.trim() || defaultProjectName();
+
+  // 1) Her işlem artık her zaman kalıcı bir proje oluşturur (adım 6/7'deki
+  //    pipeline çağrıları değişmez; yalnızca sonuç diske yazılmaya eklenir).
+  let projectId: string;
+  try {
+    const created = (await invoke("create_project", {
+      name,
+      sourceType: state.sourceType,
+      mode: state.mode,
+      provider,
+      targetLang: lang,
+    })) as CreatedProject;
+    projectId = created.id;
+  } catch (err) {
+    setRunning(false);
+    els.progressCard.classList.add("hidden");
+    showBanner(`Proje oluşturulamadı: ${String(err)}`, "error");
+    return;
+  }
+  state.activeProject = { id: projectId, name };
+  state.manifestMeta = {
+    id: projectId,
+    name,
+    created_at: new Date().toISOString(),
+    source_type: state.sourceType,
+    provider_settings: { mode: state.mode, provider, target_lang: lang },
+  };
+  state.savedAt = null;
+  renderSavedIndicator();
 
   for (let i = 0; i < pages.length; i++) {
     if (state.cancelRequested) break;
@@ -327,7 +667,12 @@ async function run(): Promise<void> {
         provider,
         job_id: state.currentJob,
       })) as PageResult;
-      state.done.push({ input: pages[i], result, imgVer: 1 });
+      // 2) Sonucu projeye kopyala + manifeste yaz (incremental kayıt).
+      const added = (await invoke("project_add_page", {
+        projectId,
+        page: { name: pageName, result },
+      })) as AddedPage;
+      state.done.push({ name: added.name, input: added.source, result: added.result, imgVer: 1 });
       if (state.running && !state.cancelRequested) {
         els.overallFill.style.width = `${(state.done.length / pages.length) * 100}%`;
         els.progressCount.textContent = `${state.done.length}/${pages.length} sayfa`;
@@ -342,7 +687,26 @@ async function run(): Promise<void> {
   els.progressCard.classList.add("hidden");
 
   if (state.done.length) {
+    state.savedAt = Date.now();
+    state.savedFlash = false;
+    renderSavedIndicator();
     renderResults();
+    els.resultsTitle.textContent = name;
+    closeNewProjectModal();
+    setTab("editor");
+    await refreshProjects();
+  } else {
+    // Hiç sayfa işlenemedi: boş proje klasörü bırakma.
+    try {
+      await invoke("delete_project", { projectId });
+    } catch {
+      /* yoksay */
+    }
+    state.activeProject = null;
+    state.manifestMeta = null;
+    renderSavedIndicator();
+    closeNewProjectModal();
+    await refreshProjects();
   }
   if (state.cancelRequested) {
     showBanner(
@@ -387,7 +751,7 @@ function renderThumbs(): void {
     const thumb = document.createElement("button");
     thumb.type = "button";
     thumb.className = "thumb" + (idx === state.selected ? " active" : "");
-    thumb.title = `${basename(item.input)} · ${item.result.provider?.name ?? ""}`;
+    thumb.title = `${item.name} · ${item.result.provider?.name ?? ""}`;
     const img = document.createElement("img");
     img.src = pageImageUrl(item.result.outputs.translated, item.imgVer);
     img.alt = `Sayfa ${idx + 1}`;
@@ -427,7 +791,7 @@ function renderSelected(): void {
   }
 
   const meta: string[] = [
-    basename(item.input),
+    item.name,
     r.provider?.name ? `Arka uç: ${r.provider.name}${r.provider.model ? ` (${r.provider.model})` : ""}` : "",
     r.mode_decision?.decision ? `Mod kararı: ${r.mode_decision.decision}` : "",
     r.mode_decision?.chosen_backend ? `Kullanılan sağlayıcı: ${r.mode_decision.chosen_backend}` : "",
@@ -447,6 +811,38 @@ function setEditMode(on: boolean): void {
   els.btnEdit.textContent = on ? "Düzenle (açık)" : "Düzenle";
   if (!on) state.selectedRegionId = null;
   renderSelected();
+}
+
+/* ------------------------------------------------- Autosave (proje manifesti) */
+
+/** Bellekteki manifesti diske yazar; "Kaydedildi" göstergesini tazeler.
+ *  Debounce gerekmez: yalnızca net eylem anlarında çağrılır (Uygula /
+ *  Devre Dışı Bırak / Sil / yeni bölge). */
+async function saveProject(): Promise<void> {
+  if (!state.activeProject || !state.manifestMeta) return;
+  if (state.saveBusy) return;
+  state.saveBusy = true;
+  try {
+    const manifest: ProjectManifest = {
+      ...state.manifestMeta,
+      updated_at: new Date().toISOString(),
+      pages: state.done.map((d, i) => ({
+        index: i,
+        name: d.name,
+        source: d.input,
+        result: d.result,
+      })),
+    };
+    await invoke("save_project", { projectId: state.activeProject.id, manifest });
+    state.savedAt = Date.now();
+    state.savedFlash = true;
+    renderSavedIndicator();
+    void refreshProjects();
+  } catch (err) {
+    showBanner(`Kaydedilemedi: ${String(err)}`, "error");
+  } finally {
+    state.saveBusy = false;
+  }
 }
 
 /* -------------------------------------------------------- bölge düzenleme */
@@ -491,6 +887,7 @@ function editorApi(): EditorApi {
       state.selectedRegionId = region.id;
       refreshOverflowWarning();
       renderSelected();
+      void saveProject(); // autosave: yeni bölge anında kalıcı olur
     },
     async onApply(draft) {
       const item = selectedItem();
@@ -531,6 +928,7 @@ function editorApi(): EditorApi {
       if (!draft.disabled) cur.translation = draft.translation;
       cur.style = { ...REGION_STYLE_DEFAULTS, ...(res.style_used ?? draft.style) };
       afterRegionEdit();
+      void saveProject(); // autosave: Uygula anında diske yazılır
     },
     async onDisable(region) {
       const item = selectedItem();
@@ -553,6 +951,7 @@ function editorApi(): EditorApi {
       cur.disabled = true;
       cur.overflow = false;
       afterRegionEdit();
+      void saveProject();
     },
     async onDelete(region) {
       const item = selectedItem();
@@ -574,6 +973,7 @@ function editorApi(): EditorApi {
       if (state.selectedRegionId === region.id) state.selectedRegionId = null;
       refreshOverflowWarning();
       renderSelected();
+      void saveProject();
     },
   };
 }
@@ -590,13 +990,13 @@ async function exportResults(): Promise<void> {
   const errors: string[] = [];
   for (const item of state.done) {
     const r = item.result;
-    const base = stripExt(basename(item.input));
+    const base = stripExt(item.name);
     try {
       if (r.outputs.translated) {
         await invoke("copy_file", { src: r.outputs.translated, dstDir: folder });
       }
       await invoke("write_text_file", {
-        path: `${folder}\\${base}_result.json`,
+        path: `${folder}/${base}_result.json`,
         contents: JSON.stringify({ ...r, source_image: item.input }, null, 2),
       });
       copied++;
@@ -636,6 +1036,29 @@ async function initEvents(): Promise<void> {
   els.bannerClose.addEventListener("click", hideBanner);
   els.btnPickFile.addEventListener("click", () => void pickFile());
   els.btnPickFolder.addEventListener("click", () => void pickFolder());
+
+  els.tabMangas.addEventListener("click", () => setTab("mangas"));
+  els.tabEditor.addEventListener("click", () => setTab("editor"));
+  els.btnNewProject.addEventListener("click", openNewProjectModal);
+  els.modalClose.addEventListener("click", closeNewProjectModal);
+  els.modalBackdrop.addEventListener("click", closeNewProjectModal);
+
+  els.confirmOk.addEventListener("click", () => {
+    const cb = confirmCallback;
+    closeConfirm();
+    cb?.();
+  });
+  els.confirmCancel.addEventListener("click", closeConfirm);
+  $<HTMLDivElement>("confirm-backdrop").addEventListener("click", closeConfirm);
+
+  window.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    if (!els.confirmModal.classList.contains("hidden")) {
+      closeConfirm();
+    } else if (!els.newProjectModal.classList.contains("hidden") && !state.running) {
+      closeNewProjectModal();
+    }
+  });
 
   for (const btn of els.modeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
     btn.addEventListener("click", () => {
@@ -685,6 +1108,9 @@ async function main(): Promise<void> {
   setMode("auto");
   await initEvents();
   await loadProviders();
+  setTab("mangas");
+  renderSavedIndicator();
+  await refreshProjects();
 }
 
 void main();
