@@ -583,6 +583,11 @@ select:disabled {
   border-radius: 3px;
 }
 
+.ov-rect.clickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
 /* --- küçük resimler --- */
 
 .thumbs {
@@ -619,6 +624,243 @@ select:disabled {
 
 .thumb.active {
   border-color: var(--accent);
+}
+
+/* ------------------------------------------------------------ bölge editörü (adım 7) */
+
+.editor-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  align-items: start;
+}
+
+.editor-stage {
+  position: relative;
+  width: 100%;
+  cursor: crosshair;
+  border-radius: 10px;
+  overflow: hidden;
+  outline: 1px solid var(--border);
+  background: var(--card-2);
+  min-height: 120px;
+}
+
+.editor-stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.editor-overlay {
+  pointer-events: none;
+}
+
+.reg-box {
+  position: absolute;
+  border: 1.5px solid rgba(120, 170, 255, 0.55);
+  background: rgba(120, 170, 255, 0.08);
+  border-radius: 2px;
+  pointer-events: auto;
+  cursor: move;
+  overflow: visible;
+}
+
+.reg-box:hover {
+  border-color: var(--accent);
+}
+
+.reg-box.selected {
+  border: 2px solid var(--accent);
+  background: rgba(97, 175, 255, 0.16);
+}
+
+.reg-box.dirty {
+  border-color: #ffc400;
+  box-shadow: 0 0 0 3px rgba(255, 196, 0, 0.28);
+}
+
+.reg-box.overflow:not(.disabled) {
+  border: 2px dashed var(--err);
+  background: rgba(255, 92, 92, 0.14);
+}
+
+.reg-box.disabled {
+  border-color: #666;
+  background: rgba(120, 120, 120, 0.22);
+  border-style: dashed;
+}
+
+.reg-box.manual {
+  border-style: solid;
+}
+
+.reg-preview {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.15;
+  padding: 3px 6px;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-wrap: balance;
+  word-break: break-word;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
+.draw-ghost {
+  position: absolute;
+  border: 2px dashed var(--accent);
+  background: rgba(97, 175, 255, 0.12);
+  border-radius: 2px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.editor-panel {
+  position: sticky;
+  top: 16px;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.editor-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dirty-hint {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffc400;
+}
+
+.warn-text {
+  color: var(--err);
+  font-weight: 500;
+}
+
+.editor-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 64px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-2);
+  color: var(--text);
+  padding: 8px 10px;
+  font: inherit;
+}
+
+.editor-panel textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.editor-panel textarea:disabled {
+  opacity: 0.5;
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.swatch {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  cursor: pointer;
+  padding: 0;
+}
+
+.swatch:hover {
+  border-color: var(--muted);
+}
+
+.swatch.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(97, 175, 255, 0.3);
+}
+
+.swatch.auto {
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--card-2);
+}
+
+.color-input {
+  appearance: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+}
+
+.color-input::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+.color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: 5px;
+}
+
+.editor-actions {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.check-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.size-row input[type="number"] {
+  width: 64px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card-2);
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+}
+
+.size-row input:disabled {
+  opacity: 0.5;
+}
+
+@media (max-width: 1100px) {
+  .editor-wrap {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-panel {
+    position: static;
+  }
 }
 
 /* ------------------------------------------------------------ responsive */

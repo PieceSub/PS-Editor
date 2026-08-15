@@ -74,6 +74,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -715,6 +716,68 @@ def fit_font_size(
     return size, lines, line_height(font)
 
 
+# ------------------------------------------------------- bolge-bazli stil (adim 7)
+
+REGION_STYLE_DEFAULTS: dict = {
+    "font_weight": "bold",       # "bold" | "normal"
+    "color": None,               # None -> klasik siyah dolgu + beyaz kontur
+    "font_size_override": None,  # int -> otomatik uyumu iptal eder
+    "align": "center",           # "left" | "center" | "right"
+}
+
+
+def normalize_region_style(style: dict | None) -> dict:
+    """Bölge stilini dogrular, eksik alanlari varsayilanla doldurur.
+
+    Bilinmeyen/yanlis tipli degerler sessizce varsayilana duser; firlatma
+    yoktur - frontend'in gonderebilecegi kirli degerlere karsi dayanikli.
+    """
+    out = dict(REGION_STYLE_DEFAULTS)
+    if not style or not isinstance(style, dict):
+        return out
+    for key in ("font_weight", "color", "font_size_override", "align"):
+        if key not in style or style[key] is None:
+            continue
+        val = style[key]
+        if key == "font_weight":
+            if val in ("bold", "normal"):
+                out[key] = val
+        elif key == "align":
+            if val in ("left", "center", "right"):
+                out[key] = val
+        elif key == "font_size_override":
+            try:
+                out[key] = max(1, int(val))
+            except (TypeError, ValueError):
+                pass
+        elif key == "color":
+            s = str(val).strip()
+            if re.fullmatch(r"#[0-9a-fA-F]{6}", s):
+                out[key] = s
+    return out
+
+
+def resolve_font_for_weight(font_path: str | Path, weight: str) -> Path:
+    """Kayitli bold/regular font ciftini duyarlı sekilde secer.
+
+    font_path default (ComicNeue-Bold) ise ve weight='normal' istendiyse
+    yanindaki Regular dosyasina gecilir; ozel fontta (kullanici yolu) bolunme
+    yoksa oldugu gibi kullanilir - ozel TTF zaten kendi agirligini tasir.
+    """
+    p = Path(font_path)
+    if weight == "normal" and p.name.lower() in ("comicneue-bold.ttf", "comicneue_bold.ttf"):
+        sibling = p.parent / "ComicNeue-Regular.ttf"
+        if sibling.is_file():
+            return sibling
+    return p
+
+
+def _relative_luminance(hex_color: str) -> float:
+    """W3C yakinligi (BT.709) - kontur rengi secimi icin 0..1."""
+    r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
 def typeset_region(
     img: Image.Image,
     bbox: tuple[int, int, int, int],
@@ -725,32 +788,69 @@ def typeset_region(
     margin_x_frac: float = 0.06,
     margin_y_frac: float = 0.08,
     stroke_frac: float = 0.10,
+    style: dict | None = None,
 ) -> dict:
     """Bir bolgeye ceviriyi yazar. Olcu bilgilerini (font, satirlar, tasma)
-    sozluk olarak dondurur."""
+    sozluk olarak dondurur.
+
+    Adim 7: istege bagli `style` sozlugu bolge bazli gorunum secenekleri:
+      - font_weight        : "bold" (varsayilan) | "normal" - font dosyasi secimi
+      - color              : "#rrggbb" | None (varsayilan) - None ise eski
+                             davranis: siyah dolgu + beyaz kontur (scanlation).
+                             Renk verilirse dolgu renk olur; kontur parlakliga
+                             gore otomatik (koyu renkte beyaz, acikta siyah).
+      - font_size_override : int | None - verilirse sabit boyut (otomatik
+                             uyum atlanir); tasma yine raporlanir.
+      - align              : "left" | "center" (varsayilan) | "right" - yatay
+                             hizalama; dikey ortalamaya dokunmaz.
+    `style=None` veya bos dict -> onceki davranisin aynisi (geriye donuk).
+    """
+    st = normalize_region_style(style)
+    font_path = resolve_font_for_weight(font_path, st["font_weight"])
+
     x1, y1, x2, y2 = bbox
     bw, bh = x2 - x1, y2 - y1
     ix = max(1, int(bw * margin_x_frac))
     iy = max(1, int(bh * margin_y_frac))
     inner_w, inner_h = bw - 2 * ix, bh - 2 * iy
 
-    cap = min(max_size, max(min_size, int(inner_h * 0.45)))
-    size, lines, lh = fit_font_size(text, font_path, inner_w, inner_h, min_size, cap)
-    font = ImageFont.truetype(str(font_path), size)
+    if st["font_size_override"]:
+        size = max(min_size, min(int(st["font_size_override"]), max(200, max_size)))
+        font = ImageFont.truetype(str(font_path), size)
+        lines = wrap_text(text, font, inner_w)
+        lh = line_height(font)
+    else:
+        cap = min(max_size, max(min_size, int(inner_h * 0.45)))
+        size, lines, lh = fit_font_size(
+            text, font_path, inner_w, inner_h, min_size, cap)
+        font = ImageFont.truetype(str(font_path), size)
     block_h = len(lines) * lh
     overflow = block_h > inner_h
     stroke = max(2, int(size * stroke_frac))
+
+    # Renk cozumu: None -> klasik; deger verildiyse kontur parlakliga gore.
+    if st["color"] is None:
+        fill = "black"
+        stroke_fill = "white"
+    else:
+        fill = st["color"]
+        stroke_fill = "black" if _relative_luminance(st["color"]) >= 140 else "white"
 
     top = y1 + iy + max(0, (inner_h - block_h) // 2)
     draw = ImageDraw.Draw(img)
     for i, line in enumerate(lines):
         lw = int(font.getlength(line))
-        x = x1 + ix + max(0, (inner_w - lw) // 2)
+        if st["align"] == "left":
+            x = x1 + ix
+        elif st["align"] == "right":
+            x = x2 - ix - lw
+        else:
+            x = x1 + ix + max(0, (inner_w - lw) // 2)
         y = top + i * lh
         if stroke > 0:
-            draw.text((x, y), line, font=font, fill="white", stroke_width=stroke,
-                      stroke_fill="white")
-        draw.text((x, y), line, font=font, fill="black")
+            draw.text((x, y), line, font=font, fill=stroke_fill,
+                      stroke_width=stroke, stroke_fill=stroke_fill)
+        draw.text((x, y), line, font=font, fill=fill)
 
     return {
         "font_size": size,
@@ -759,6 +859,144 @@ def typeset_region(
         "block_height": block_h,
         "inner": (x1 + ix, y1 + iy, x2 - ix, y2 - iy),
         "overflow": overflow,
+        "style_used": st,
+    }
+
+
+# ------------------------------------------------------- bolge bazli yeniden render (adim 7)
+
+ERASE_PAD_FRAC = 0.04       # silme kutusunu genisletme orani (kontur kalintisi icin)
+INPAINT_RADIUS = 3
+
+
+def _erase_box(canvas: Image.Image, source: Image.Image | None, box: tuple[int, int, int, int],
+               method: str) -> None:
+    """Bir kutuyu okunmaz hale getirir (eski typeset / kacirilmis kaynak metin).
+
+    - "paste"   : temizlenmis gorselin ayni bolgesini yapistirir (canvas'a
+                  sadik, anlik). Kaynak metin inpainting ile silinmis bir
+                  bolge icin dogrudur.
+    - "inpaint" : kaynak gorsel yoksa ya da bolge hic inpaintenmemisse
+                  (elle eklenen bolgeler) yerel cv2 Telea yontemiyle doldurur
+                  (torch yok, ~1 sn).
+    - "none"    : dokunma (yalnizca typeset).
+    """
+    x1, y1, x2, y2 = box
+    if method == "none" or x2 <= x1 or y2 <= y1:
+        return
+    if method == "paste" and source is not None:
+        w, h = canvas.size
+        cx1, cy1 = max(0, x1), max(0, y1)
+        cx2, cy2 = min(w, x2), min(h, y2)
+        if cx2 > cx1 and cy2 > cy1:
+            canvas.paste(source.crop((cx1, cy1, cx2, cy2)), (cx1, cy1, cx2, cy2))
+        return
+    if method == "inpaint":
+        import cv2
+        import numpy as np
+        w, h = canvas.size
+        cx1, cy1 = max(0, x1), max(0, y1)
+        cx2, cy2 = min(w, x2), min(h, y2)
+        if cx2 <= cx1 or cy2 <= cy1:
+            return
+        big = canvas.crop((cx1, cy1, cx2, cy2)).convert("RGB")
+        mask = np.zeros((cy2 - cy1, cx2 - cx1), dtype=np.uint8)
+        mask[:] = 255
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.dilate(mask, kernel, iterations=1)
+        res = cv2.inpaint(np.asarray(big), mask, INPAINT_RADIUS, cv2.INPAINT_TELEA)
+        canvas.paste(Image.fromarray(res), (cx1, cy1, cx2, cy2))
+        return
+    raise ValueError(f"bilinmeyen silme yontemi: {method!r}")
+
+
+def re_render_region(
+    cleaned_path: str | Path | None,
+    output_path: str | Path,
+    bbox: tuple[int, int, int, int],
+    translation: str,
+    font_path: str | Path = DEFAULT_FONT,
+    min_size: int = 9,
+    max_size: int = 36,
+    style: dict | None = None,
+    erase: str = "paste",
+    erase_boxes: list[tuple[int, int, int, int]] | None = None,
+) -> dict:
+    """TEK bolgeyi yeniden typeset eder; sayfanin geri kalani degismez.
+
+    Strateji (arastirma notu: PIL crop+paste, bolge bazli yeniden renderin
+    kanonik yoludur -- Pillow docs Image.crop / Image.paste):
+      1) canvas = cikti gorseli (mevcut translated sayfa) kopyasi
+      2) hedef kutu onceden temizlenmis gorselden (kaynak metinsiz) kırpılıp
+         geri yapistirilir -> eski typeset metni gider ("paste")
+         - kaynak yoksa / bolge inpaintenmemisse yerel cv2 inpaint ("inpaint")
+      3) yeni ceviri ayarli stille yazilir (typeset_region)
+      4) dosya kaydedilir; yeni olcumler ve kullanilan stil doner.
+
+    Böylece otomatik pipeline'i (OCR/inpainting/ceviri) hic calistirmadan
+    yalnizca bu bolge guncellenir; islem yalnizca PIL (+istege bagli cv2)
+    icerir, torch yuklemez.
+    """
+    if os.path.isfile(output_path):
+        canvas = Image.open(output_path).convert("RGB")
+    else:
+        # Cikti henuz yok (ornek: cok yeni elle bolge) -> temiz gorselden basla.
+        canvas = (
+            Image.open(cleaned_path).convert("RGB")
+            if cleaned_path and Path(cleaned_path).is_file()
+            else None
+        )
+        if canvas is None:
+            raise ValueError(
+                "Yeniden render icin cikti gorseli yok ve temizlenmis kaynak "
+                "bulunamadi; sayfayi once isleyin."
+            )
+    source = (
+        Image.open(cleaned_path).convert("RGB")
+        if cleaned_path and Path(cleaned_path).is_file()
+        else None
+    )
+    if source is None and erase == "paste":
+        erase = "inpaint"
+    # Varsayilan silme: typeset edilecek kutunun kendisi (+ guvenli pay);
+    # tasinma durumunda eski konum da erase_boxes ile birlikte silinir.
+    pad_x = max(4, int((bbox[2] - bbox[0]) * ERASE_PAD_FRAC))
+    pad_y = max(4, int((bbox[3] - bbox[1]) * ERASE_PAD_FRAC))
+    boxes = [bbox, *(erase_boxes or [])]
+    for bx in boxes:
+        grown = (
+            bx[0] - pad_x, bx[1] - pad_y, bx[2] + pad_x, bx[3] + pad_y
+        )
+        _erase_box(canvas, source, grown, erase)
+
+    if not (translation or "").strip():
+        # Bos metin = bolgeyi devre disi birak (yalnizca sil, yazma).
+        canvas.save(output_path)
+        return {
+            "bbox": list(bbox),
+            "translation": "",
+            "font_size": None,
+            "lines": 0,
+            "overflow": False,
+            "disabled": True,
+            "style_used": normalize_region_style(style),
+            "erase": erase,
+        }
+
+    info = typeset_region(
+        canvas, bbox, translation, font_path,
+        min_size=min_size, max_size=max_size, style=style)
+
+    canvas.save(output_path)
+    return {
+        "bbox": list(bbox),
+        "translation": translation,
+        "font_size": info["font_size"],
+        "lines": len(info["lines"]),
+        "overflow": info["overflow"],
+        "disabled": False,
+        "style_used": info["style_used"],
+        "erase": erase,
     }
 
 

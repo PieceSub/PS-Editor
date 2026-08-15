@@ -729,6 +729,7 @@ def translate_page_pipeline(
                 "font_size": typeset_info[e["id"]]["font_size"],
                 "lines": typeset_info[e["id"]]["lines"],
                 "overflow": typeset_info[e["id"]]["overflow"],
+                "style": typeset_info[e["id"]].get("style_used") or {},
             }
             for e, r in zip(entries, ordered)
         ],

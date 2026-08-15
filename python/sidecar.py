@@ -256,11 +256,66 @@ def cmd_vram_report(payload: dict) -> dict:
     }
 
 
+def cmd_re_render_region(payload: dict) -> dict:
+    """Bölge bazlı yeniden typeset (adim 7).
+
+    Otomatik pipeline'i (OCR/inpaint/ceviri) yeniden calistirmadan yalnizca
+    istenen bolgeyi gunceller: eski metni temizlenmis gorselden kırpıp
+    yapistirir (veya elle eklenen bolgelerde yerel cv2 inpaint), yeni metni
+    bolge stiliyle yazar. Hafif bagimliliklar (PIL + istege bagli cv2);
+    torch YUKLENMEZ, yanit ~1 sn icinde doner.
+
+    Girdi:
+      output        : duzenlenecek translated gorsel yolu (ustune yazilir)
+      cleaned       : temizlenmis gorsel yolu (istege bagli; "paste" icin)
+      region        : {bbox, translation, style, erase, erase_boxes}
+      settings      : Settings override (font / min_font_size / max_font_size)
+    """
+    from pipeline import Settings  # agir degil: Settings yalnizca dataclass
+    from translate_typeset_prototype import DEFAULT_FONT, re_render_region
+
+    s = Settings.from_mapping(payload.get("settings") or None)
+    region = payload.get("region") or {}
+    bbox = region.get("bbox") or []
+    if len(bbox) != 4:
+        raise SidecarError(
+            "Bolge bbox'i gecersiz: [x1, y1, x2, y2] bekleniyor.")
+    output = payload.get("output", "")
+    if not output:
+        raise SidecarError("Cikti gorsel yolu verilmedi (output).")
+
+    try:
+        return re_render_region(
+            cleaned_path=payload.get("cleaned"),
+            output_path=output,
+            bbox=tuple(int(v) for v in bbox),
+            translation=str(region.get("translation") or ""),
+            font_path=str(s.font or DEFAULT_FONT),
+            min_size=int(s.min_font_size),
+            max_size=int(s.max_font_size),
+            style=region.get("style") or None,
+            erase=region.get("erase") or "paste",
+            erase_boxes=[
+                tuple(int(v) for v in box)
+                for box in (region.get("erase_boxes") or [])
+                if len(box) == 4
+            ] or None,
+        )
+    except FileNotFoundError as exc:
+        raise SidecarError(
+            f"Gorsel bulunamadi: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 - kullanici dostu mesaj
+        raise SidecarError(
+            f"Bolge yeniden render edilemedi: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 COMMANDS = {
     "hello": cmd_hello,
     "ping": cmd_ping,
     "check_cuda": cmd_check_cuda,
     "translate_page": cmd_translate_page,
+    "re_render_region": cmd_re_render_region,
     "set_api_key": cmd_set_api_key,
     "delete_api_key": cmd_delete_api_key,
     "list_providers": cmd_list_providers,

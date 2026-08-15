@@ -1,14 +1,33 @@
 /** Sonuç görüntüleyici: kaydırmalı before/after karşılaştırıcı + yan yana mod.
- *
+
  * Araştırma notu: bağımlılıksız before/after slider için yerleşik desen, iki
  * görseli üst üste koyup üst katmanı tek bir `clip-path: inset(...)` ile
  * kırpmaktır; sürükleme ise üste yayılan native `<input type="range">` ile
  * çözülür (klavye/touch erişilebilirliği de bedavaya gelir).
  * Kaynaklar: dev.to/dev48v (clip-path + setPos deseni), cloudfour.com/thinks
- * (er işilebilir web component), CodeFronts (range-input --pos deseni).
+ * (erişilebilir web component), CodeFronts (range-input --pos deseni).
+ *
+ * Adım 7: bölgeler artık tıklanabilir (editör için) — kutular % tabanlı
+ * overlay div'leridir; görselle birebir ölçeklenir. Stil/veri tipleri burada
+ * tanımlanır, düzenleyici arayüz editor.ts'te yaşar.
  */
 
 import { convertFileSrc } from "@tauri-apps/api/core";
+
+/** Bölge-bazlı typeset stili. Backend ile birebir aynı şema (adım 7). */
+export interface RegionStyle {
+  font_weight: "bold" | "normal";
+  color: string | null;
+  font_size_override: number | null;
+  align: "left" | "center" | "right";
+}
+
+export const REGION_STYLE_DEFAULTS: RegionStyle = {
+  font_weight: "bold",
+  color: null,
+  font_size_override: null,
+  align: "center",
+};
 
 export interface Region {
   id: number;
@@ -17,9 +36,16 @@ export interface Region {
   bbox: number[];
   original: string;
   translation: string;
-  font_size: number;
+  font_size: number | null;
   lines: number;
   overflow: boolean;
+  style?: Partial<RegionStyle>;
+  /** Kullanıcı tarafından elle çizilen bölge (otomatik tespit değil). */
+  manual?: boolean;
+  /** Kullanıcı "bu bölgeyi typeset etme" dedi mi? */
+  disabled?: boolean;
+  /** Backend'e en az bir kez uygulandı mı (görselde varlığı)? */
+  committed?: boolean;
 }
 
 export interface PageResult {
@@ -41,6 +67,8 @@ export interface PageResult {
 
 export type ViewMode = "compare" | "side";
 
+export type RegionClickHandler = (region: Region) => void;
+
 let resizeHandler: (() => void) | null = null;
 
 window.addEventListener("resize", () => {
@@ -58,28 +86,52 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
-function overflowRects(regions: Region[], imgW: number, imgH: number): HTMLElement {
+/** Görsel dosya yolunu Tauri asset protokolüne çevirir; ver verilmişse
+ * cache-busting query ekler (düzenleme sonrası aynı yolu yeniden gösterir). */
+export function pageImageUrl(path: string, ver?: number): string {
+  return convertFileSrc(path) + (ver && ver > 0 ? `?v=${ver}` : "");
+}
+
+function imgFor(path: string, alt: string, ver?: number): HTMLImageElement {
+  const img = el("img");
+  img.src = pageImageUrl(path, ver);
+  img.alt = alt;
+  img.draggable = false;
+  return img;
+}
+
+function regionRect(regions: Region[], imgW: number, imgH: number, onSelect: RegionClickHandler | null): HTMLElement {
   const layer = el("div", "ov-layer");
   for (const r of regions) {
-    if (!r.overflow || r.bbox.length < 4) continue;
+    if (r.bbox.length < 4) continue;
     const [x, y, w, h] = r.bbox;
     const box = el("div", "ov-rect");
+    if (r.overflow && !r.disabled) box.classList.add("overflow");
+    if (r.disabled) box.classList.add("disabled");
+    if (r.manual) box.classList.add("manual");
     box.style.left = `${(x / imgW) * 100}%`;
     box.style.top = `${(y / imgH) * 100}%`;
     box.style.width = `${(w / imgW) * 100}%`;
     box.style.height = `${(h / imgH) * 100}%`;
-    box.title = `${r.label_name || "Bölge"}: metin balon dışına taşıyor`;
+    const meta = [
+      r.label_name || "Bölge",
+      r.manual ? "(elle)" : "",
+      r.disabled ? "(kapalı)" : "",
+      r.overflow && !r.disabled ? "metin taşıyor" : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    box.title = `${meta}: ${r.translation || "—"}`;
+    if (onSelect) {
+      box.classList.add("clickable");
+      box.addEventListener("pointerdown", (ev) => {
+        ev.stopPropagation();
+        onSelect(r);
+      });
+    }
     layer.appendChild(box);
   }
   return layer;
-}
-
-function imgFor(path: string, alt: string): HTMLImageElement {
-  const img = el("img");
-  img.src = convertFileSrc(path);
-  img.alt = alt;
-  img.draggable = false;
-  return img;
 }
 
 /** Dikey manga sayfaları pencere yüksekliğine sığacak şekilde kırpılır. */
@@ -96,16 +148,22 @@ function fitStage(stage: HTMLElement, naturalW: number, naturalH: number): void 
   stage.style.height = `${Math.round(h)}px`;
 }
 
+interface OverlayInput {
+  regions: Region[];
+  showOverflow: boolean;
+  onSelect: RegionClickHandler | null;
+  ver?: number;
+}
+
 function buildCompareStage(
   beforePath: string,
   afterPath: string,
-  regions: Region[],
-  showOverflow: boolean,
+  input: OverlayInput,
 ): HTMLElement {
   const stage = el("div", "compare-stage");
   stage.style.setProperty("--pos", "50%");
 
-  const after = imgFor(afterPath, "Çevrilmiş sayfa");
+  const after = imgFor(afterPath, "Çevrilmiş sayfa", input.ver);
   after.className = "layer-img";
   const beforeClip = el("div", "before-clip");
   const before = imgFor(beforePath, "Orijinal sayfa");
@@ -137,20 +195,25 @@ function buildCompareStage(
   let imgW = 1;
   let imgH = 1;
   const scaleOverlays = () => {
-    const fresh = overflowRects(regions, imgW, imgH);
-    fresh.style.display = showOverflow ? "" : "none";
+    const fresh = regionRect(input.regions, imgW, imgH, input.onSelect);
+    if (!input.showOverflow) {
+      fresh.querySelectorAll(".ov-rect.overflow").forEach((b) => b.classList.add("hidden"));
+    }
     overlays.replaceChildren(fresh);
   };
   scaleOverlays();
 
   void Promise.all([
-    after.decode().then(() => {
-      imgW = after.naturalWidth || 1;
-      imgH = after.naturalHeight || 1;
-      fitStage(stage, imgW, imgH);
-      resizeHandler = () => fitStage(stage, imgW, imgH);
-      scaleOverlays();
-    }).catch(() => undefined),
+    after
+      .decode()
+      .then(() => {
+        imgW = after.naturalWidth || 1;
+        imgH = after.naturalHeight || 1;
+        fitStage(stage, imgW, imgH);
+        resizeHandler = () => fitStage(stage, imgW, imgH);
+        scaleOverlays();
+      })
+      .catch(() => undefined),
     before.decode().catch(() => undefined),
   ]);
 
@@ -175,8 +238,7 @@ function fitSidePanels(grid: HTMLElement, naturalW: number, naturalH: number): v
 function buildSideBySide(
   beforePath: string,
   afterPath: string,
-  regions: Region[],
-  showOverflow: boolean,
+  input: OverlayInput,
 ): HTMLElement {
   const grid = el("div", "side-grid");
 
@@ -186,7 +248,7 @@ function buildSideBySide(
   beforePanel.appendChild(el("figcaption", "", "Orijinal"));
 
   const afterPanel = el("figure", "side-panel");
-  const afterImg = imgFor(afterPath, "Çevrilmiş sayfa");
+  const afterImg = imgFor(afterPath, "Çevrilmiş sayfa", input.ver);
   afterPanel.appendChild(afterImg);
   afterPanel.appendChild(el("figcaption", "", "Çevrilmiş"));
 
@@ -194,15 +256,20 @@ function buildSideBySide(
   afterPanel.appendChild(overlays);
 
   void Promise.all([
-    afterImg.decode().then(() => {
-      const w = afterImg.naturalWidth || 1;
-      const h = afterImg.naturalHeight || 1;
-      fitSidePanels(grid, w, h);
-      resizeHandler = () => fitSidePanels(grid, w, h);
-      const fresh = overflowRects(regions, w, h);
-      fresh.style.display = showOverflow ? "" : "none";
-      overlays.replaceChildren(fresh);
-    }).catch(() => undefined),
+    afterImg
+      .decode()
+      .then(() => {
+        const w = afterImg.naturalWidth || 1;
+        const h = afterImg.naturalHeight || 1;
+        fitSidePanels(grid, w, h);
+        resizeHandler = () => fitSidePanels(grid, w, h);
+        const fresh = regionRect(input.regions, w, h, input.onSelect);
+        if (!input.showOverflow) {
+          fresh.querySelectorAll(".ov-rect.overflow").forEach((b) => b.classList.add("hidden"));
+        }
+        overlays.replaceChildren(fresh);
+      })
+      .catch(() => undefined),
     beforeImg.decode().catch(() => undefined),
   ]);
 
@@ -210,12 +277,16 @@ function buildSideBySide(
   return grid;
 }
 
-export function renderViewer(
-  container: HTMLElement,
-  page: PageResult,
-  mode: ViewMode,
-  showOverflow: boolean,
-): void {
+export interface RenderOptions {
+  mode: ViewMode;
+  showOverflow: boolean;
+  /** Bölgelere tıklanabilirlik + seçim geri çağrısı (editör modu). */
+  onSelect?: RegionClickHandler;
+  /** Düzenleme sonrası görsel yenileme sürümü (cache-bust). */
+  ver?: number;
+}
+
+export function renderViewer(container: HTMLElement, page: PageResult, opts: RenderOptions): void {
   const beforePath = page.image;
   const afterPath = page.outputs.translated;
   if (!beforePath || !afterPath) {
@@ -223,9 +294,15 @@ export function renderViewer(
     return;
   }
   resizeHandler = null;
+  const input: OverlayInput = {
+    regions: page.regions,
+    showOverflow: opts.showOverflow,
+    onSelect: opts.onSelect ?? null,
+    ver: opts.ver,
+  };
   const view =
-    mode === "compare"
-      ? buildCompareStage(beforePath, afterPath, page.regions, showOverflow)
-      : buildSideBySide(beforePath, afterPath, page.regions, showOverflow);
+    opts.mode === "compare"
+      ? buildCompareStage(beforePath, afterPath, input)
+      : buildSideBySide(beforePath, afterPath, input);
   container.replaceChildren(view);
 }

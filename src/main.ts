@@ -1,9 +1,17 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./styles.css";
 import { stageLabel, type ProgressPayload } from "./labels";
-import { renderViewer, type PageResult, type ViewMode } from "./viewer";
+import {
+  REGION_STYLE_DEFAULTS,
+  pageImageUrl,
+  renderViewer,
+  type PageResult,
+  type Region,
+  type ViewMode,
+} from "./viewer";
+import { renderEditor, type EditorApi } from "./editor";
 
 /* ------------------------------------------------------------------ state */
 
@@ -18,6 +26,8 @@ interface ProviderInfo {
 interface DonePage {
   input: string;
   result: PageResult;
+  /** Düzenleme sonrası görsel yenileme sürümü (cache-bust). */
+  imgVer: number;
 }
 
 const state = {
@@ -34,7 +44,13 @@ const state = {
   viewMode: "compare" as ViewMode,
   showOverflow: true,
   currentJob: "",
+  editMode: false,
+  selectedRegionId: null as number | null,
 };
+
+/** Elle eklenen bölgeler için benzersiz id'ler (otomatik id'lerle çakışmaz). */
+let manualRegionSeq = 1000;
+const nextManualRegionId = (): number => ++manualRegionSeq;
 
 const PROVIDER_NAMES: Record<string, string> = {
   mock: "Mock (test)",
@@ -88,6 +104,7 @@ const els = {
   viewer: $<HTMLDivElement>("viewer"),
   overflowWarning: $<HTMLDivElement>("overflow-warning"),
   btnOverflow: $<HTMLButtonElement>("btn-overflow"),
+  btnEdit: $<HTMLButtonElement>("btn-edit"),
   btnExport: $<HTMLButtonElement>("btn-export"),
   viewModeGroup: $<HTMLDivElement>("view-mode-group"),
   thumbs: $<HTMLDivElement>("thumbs"),
@@ -310,7 +327,7 @@ async function run(): Promise<void> {
         provider,
         job_id: state.currentJob,
       })) as PageResult;
-      state.done.push({ input: pages[i], result });
+      state.done.push({ input: pages[i], result, imgVer: 1 });
       if (state.running && !state.cancelRequested) {
         els.overallFill.style.width = `${(state.done.length / pages.length) * 100}%`;
         els.progressCount.textContent = `${state.done.length}/${pages.length} sayfa`;
@@ -337,15 +354,10 @@ async function run(): Promise<void> {
 
 /* -------------------------------------------------------------- sonuçlar */
 
-function renderResults(): void {
-  els.resultsCard.classList.remove("hidden");
-  const total = state.done.length + state.failedCount;
-  els.resultSummary.textContent = `${state.done.length}/${total} sayfa başarıyla işlendi${
-    state.failedCount ? ` · ${state.failedCount} hata` : ""
-  }`;
-
+function refreshOverflowWarning(): void {
   const overflowCount = state.done.reduce(
-    (acc, d) => acc + d.result.regions.filter((r) => r.overflow).length,
+    (acc, d) =>
+      acc + d.result.regions.filter((r) => r.overflow && !r.disabled).length,
     0,
   );
   els.overflowWarning.classList.toggle("hidden", overflowCount === 0);
@@ -353,6 +365,16 @@ function renderResults(): void {
     overflowCount > 0
       ? `Dikkat: ${overflowCount} bölgede metin taşması tespit edildi — çevrilen metin bölge sınırını aşıyor (kızıl çerçeveler).`
       : "";
+}
+
+function renderResults(): void {
+  els.resultsCard.classList.remove("hidden");
+  const total = state.done.length + state.failedCount;
+  els.resultSummary.textContent = `${state.done.length}/${total} sayfa başarıyla işlendi${
+    state.failedCount ? ` · ${state.failedCount} hata` : ""
+  }`;
+
+  refreshOverflowWarning();
 
   renderThumbs();
   renderSelected();
@@ -367,7 +389,7 @@ function renderThumbs(): void {
     thumb.className = "thumb" + (idx === state.selected ? " active" : "");
     thumb.title = `${basename(item.input)} · ${item.result.provider?.name ?? ""}`;
     const img = document.createElement("img");
-    img.src = convertFileSrc(item.result.outputs.translated);
+    img.src = pageImageUrl(item.result.outputs.translated, item.imgVer);
     img.alt = `Sayfa ${idx + 1}`;
     thumb.appendChild(img);
     thumb.addEventListener("click", () => {
@@ -378,11 +400,31 @@ function renderThumbs(): void {
   });
 }
 
+function selectedItem(): DonePage | null {
+  return state.done[state.selected] ?? null;
+}
+
 function renderSelected(): void {
-  const item = state.done[state.selected];
+  const item = selectedItem();
   if (!item) return;
   const r = item.result;
-  renderViewer(els.viewer, r, state.viewMode, state.showOverflow);
+
+  if (state.editMode) {
+    renderEditor(els.viewer, r, state.selectedRegionId, item.imgVer, editorApi());
+  } else {
+    renderViewer(els.viewer, r, {
+      mode: state.viewMode,
+      showOverflow: state.showOverflow,
+      ver: item.imgVer,
+      onSelect: (region) => {
+        state.editMode = true;
+        state.selectedRegionId = region.id;
+        els.btnEdit.classList.add("active");
+        els.btnEdit.textContent = "Düzenle (açık)";
+        renderSelected();
+      },
+    });
+  }
 
   const meta: string[] = [
     basename(item.input),
@@ -397,6 +439,143 @@ function renderSelected(): void {
   Array.from(els.thumbs.children).forEach((btn, idx) => {
     btn.classList.toggle("active", idx === state.selected);
   });
+}
+
+function setEditMode(on: boolean): void {
+  state.editMode = on;
+  els.btnEdit.classList.toggle("active", on);
+  els.btnEdit.textContent = on ? "Düzenle (açık)" : "Düzenle";
+  if (!on) state.selectedRegionId = null;
+  renderSelected();
+}
+
+/* -------------------------------------------------------- bölge düzenleme */
+
+/** Düzenleme sonrası önbellek tazeler ve görünümü yeniden kurar. */
+function afterRegionEdit(): void {
+  const item = selectedItem();
+  if (!item) return;
+  item.imgVer++;
+  refreshOverflowWarning();
+  const thumb = els.thumbs.children[state.selected]?.querySelector("img");
+  if (thumb) {
+    thumb.src = pageImageUrl(item.result.outputs.translated, item.imgVer);
+  }
+  renderSelected();
+}
+
+function editorApi(): EditorApi {
+  return {
+    onSelect(id) {
+      state.selectedRegionId = id;
+      renderSelected();
+    },
+    onCreateRegion(bbox) {
+      const item = selectedItem();
+      if (!item) return;
+      const region: Region = {
+        id: nextManualRegionId(),
+        index: -1,
+        label_name: "manual",
+        bbox,
+        original: "",
+        translation: "",
+        font_size: null,
+        lines: 0,
+        overflow: false,
+        manual: true,
+        disabled: false,
+        committed: false,
+      };
+      item.result.regions.push(region);
+      state.selectedRegionId = region.id;
+      refreshOverflowWarning();
+      renderSelected();
+    },
+    async onApply(draft) {
+      const item = selectedItem();
+      if (!item) return;
+      const r = item.result;
+      const cur = r.regions.find((x) => x.id === draft.id);
+      if (!cur) throw new Error("Bölge bulunamadı");
+
+      const eraseBoxes: number[][] = [];
+      if (draft.prevBbox && draft.prevBbox.join(",") !== draft.bbox.join(",")) {
+        eraseBoxes.push(draft.prevBbox);
+      }
+      const res = (await request("re_render_region", {
+        output: r.outputs.translated,
+        cleaned: r.outputs.cleaned,
+        region: {
+          bbox: draft.bbox,
+          translation: draft.disabled ? "" : draft.translation,
+          erase: cur.manual ? "inpaint" : "paste",
+          erase_boxes: eraseBoxes,
+          style: draft.style,
+        },
+      })) as {
+        font_size: number | null;
+        lines: number;
+        overflow: boolean;
+        disabled: boolean;
+        style_used?: Partial<Region["style"]>;
+      };
+
+      cur.bbox = draft.bbox;
+      cur.font_size = res.font_size;
+      cur.lines = res.lines;
+      cur.overflow = res.overflow;
+      cur.disabled = res.disabled;
+      cur.committed = true;
+      // Devre dışı bırakılsa bile metni koru (tekrar etkinleştirmek için).
+      if (!draft.disabled) cur.translation = draft.translation;
+      cur.style = { ...REGION_STYLE_DEFAULTS, ...(res.style_used ?? draft.style) };
+      afterRegionEdit();
+    },
+    async onDisable(region) {
+      const item = selectedItem();
+      if (!item) return;
+      const r = item.result;
+      const cur = r.regions.find((x) => x.id === region.id);
+      if (!cur) return;
+      if (cur.committed) {
+        await request("re_render_region", {
+          output: r.outputs.translated,
+          cleaned: r.outputs.cleaned,
+          region: {
+            bbox: cur.bbox,
+            translation: "",
+            erase: cur.manual ? "inpaint" : "paste",
+            style: cur.style ?? null,
+          },
+        });
+      }
+      cur.disabled = true;
+      cur.overflow = false;
+      afterRegionEdit();
+    },
+    async onDelete(region) {
+      const item = selectedItem();
+      if (!item) return;
+      const r = item.result;
+      if (region.committed) {
+        await request("re_render_region", {
+          output: r.outputs.translated,
+          cleaned: r.outputs.cleaned,
+          region: {
+            bbox: region.bbox,
+            translation: "",
+            erase: region.manual ? "inpaint" : "paste",
+            style: region.style ?? null,
+          },
+        });
+      }
+      r.regions = r.regions.filter((x) => x.id !== region.id);
+      if (state.selectedRegionId === region.id) state.selectedRegionId = null;
+      refreshOverflowWarning();
+      renderSelected();
+    },
+  };
 }
 
 /* ----------------------------------------------------------- dışa aktarma */
@@ -489,6 +668,8 @@ async function initEvents(): Promise<void> {
     els.btnOverflow.classList.toggle("active", state.showOverflow);
     renderSelected();
   });
+
+  els.btnEdit.addEventListener("click", () => setEditMode(!state.editMode));
 
   els.btnStart.addEventListener("click", () => void run());
   els.btnCancel.addEventListener("click", () => {

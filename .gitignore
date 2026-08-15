@@ -17,6 +17,9 @@ __pycache__/
 # dosya olarak repo'ya girmez; her platformda ayrı derlenir)
 src-tauri/binaries/
 
+# Python test çıktıları
+python/test_data/_re_render_test/
+
 # Loglar / yerel
 *.log
 .DS_Store
