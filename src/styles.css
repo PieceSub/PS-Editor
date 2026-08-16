@@ -28,6 +28,30 @@ body {
   color: var(--text);
 }
 
+/* Metin seçimi: genel arayüz (başlıklar, etiketler, kartlar) web sitesi gibi
+   mavi vurguyla seçilmemeli — native masaüstü hissi için kapatılır. Gerçekten
+   düzenlenebilir alanlarda (metin kutuları, çeviri girişi) aşağıda yeniden
+   açılır. */
+html,
+body,
+#app {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Görselleri pencereden dışarı sürükleyip bırakma (tarayıcı davranışı) kapalı. */
+img,
+a {
+  -webkit-user-drag: none;
+}
+
 #app {
   max-width: 1180px;
   margin: 0 auto;

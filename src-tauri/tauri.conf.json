@@ -10,23 +10,15 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "PS Editor",
-        "width": 1180,
-        "height": 820,
-        "minWidth": 860,
-        "minHeight": 600,
-        "resizable": true
-      }
-    ],
     "security": {
       "csp": null,
       "assetProtocol": {
         "enable": true,
         "scope": {
           "requireLiteralLeadingDot": false,
-          "allow": ["**/*"]
+          "allow": [
+            "**/*"
+          ]
         }
       }
     }

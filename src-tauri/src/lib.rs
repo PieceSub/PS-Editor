@@ -208,6 +208,18 @@ fn spawn_python_dev(app: &AppHandle, state: &Arc<PyState>) -> Result<(), String>
     Ok(())
 }
 
+/// Tarayıcı sağ tık menüsünü (native context menu) devre dışı bırakan script.
+///
+/// Tauri 2 çekirdeğinde "context menu kapalı" diye bir yapılandırma yoktur;
+/// resmî öneri (tauri-apps/discussions#11808) `contextmenu` olayını capture
+/// fazında iptal etmektir. `preventDefault` yapılan olayda hem WebView2
+/// (Windows) hem WebKitGTK (Linux) yerleşik menüyü göstermez; böylece
+/// platform farkı olmadan native masaüstü hissi sağlanır. Script her
+/// sayfa yüklemesinde (yenileme dahil) içerikten önce çalışır.
+const CONTEXT_MENU_BLOCK_SCRIPT: &str = r#"
+  window.addEventListener("contextmenu", (event) => event.preventDefault(), true);
+"#;
+
 /// İsteği sidecar'a gönderir ve yanıtı bekler. (Bloklama — async çağıranlar
 /// spawn_blocking kullanmalı.)
 fn send_request(state: &PyState, cmd: &str, payload: Value) -> Result<Value, String> {
@@ -310,6 +322,33 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(|e| format!("Dosya yazılamadı: {e}"))
 }
 
+/// Geliştirme modu ayrımı: `debug_assertions` etkinse (tauri dev / debug
+/// build) true döner. Sağ tık menüsü her derlemede kapalıdır; debug'da
+/// DevTools erişimi başlıktaki buton ve Ctrl+Shift+I ile sağlanır.
+#[tauri::command]
+fn app_is_dev() -> bool {
+    cfg!(debug_assertions)
+}
+
+/// DevTools penceresini açar (yalnızca debug yapılarda işe yarar; release
+/// derlemelerinde buton hiç görünmez). Tauri'nin `open_devtools` API'si
+/// release derlemelerinde `devtools` özelliği olmadan derlenmez; bu yüzden
+/// gövde debug_assertions'a bağlıdır.
+#[tauri::command]
+fn open_devtools(app: tauri::AppHandle) {
+    open_devtools_impl(&app);
+}
+
+#[cfg(debug_assertions)]
+fn open_devtools_impl(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        window.open_devtools();
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn open_devtools_impl(_app: &tauri::AppHandle) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -320,6 +359,8 @@ pub fn run() {
             list_images,
             copy_file,
             write_text_file,
+            app_is_dev,
+            open_devtools,
             projects::list_projects,
             projects::create_project,
             projects::project_add_page,
@@ -329,6 +370,18 @@ pub fn run() {
             projects::delete_project
         ])
         .setup(|app| {
+            // Pencere programatik olarak kurulur (tauri.conf.json'daki windows
+            // dizisi kaldırıldı): sağ tık menüsünü engelleyen script'in sayfa
+            // yüklemesinden ÖNCE enjekte edilmesi için initialization_script
+            // gerekir (setup içinde eval yapmak ilk yüklemede kaybolur).
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+                .title("PS Editor")
+                .inner_size(1180.0, 820.0)
+                .min_inner_size(860.0, 600.0)
+                .resizable(true)
+                .initialization_script(CONTEXT_MENU_BLOCK_SCRIPT)
+                .build()?;
+
             let state = Arc::new(PyState::new());
             app.manage(state.clone());
 
