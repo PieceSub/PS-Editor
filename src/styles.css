@@ -1,13 +1,13 @@
 :root {
   color-scheme: dark;
-  --bg: #12141a;
-  --card: #1b1e27;
-  --card-2: #232733;
-  --border: #2a2e3a;
-  --text: #e6e8ee;
-  --muted: #9aa2b1;
-  --accent: #e05a8a;
-  --accent-soft: rgba(224, 90, 138, 0.16);
+  --bg: #0b0b0e;
+  --card: #141419;
+  --card-2: #1c1c23;
+  --border: #26262e;
+  --text: #e8e6ea;
+  --muted: #9b97a3;
+  --accent: #d92525;
+  --accent-soft: rgba(217, 37, 37, 0.16);
   --ok: #3ddc84;
   --err: #ff5c5c;
   --warn: #ffb454;
@@ -38,9 +38,25 @@ body {
 
 header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.logo {
+  width: 220px;
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+  display: block;
 }
 
 header h1 {
@@ -353,7 +369,7 @@ select:disabled {
 .bar .fill {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #c14f78, var(--accent));
+  background: linear-gradient(90deg, #7a1515, var(--accent));
   width: 0%;
   transition: width 0.25s ease;
 }
@@ -1001,8 +1017,8 @@ select:disabled {
     45deg,
     var(--card-2),
     var(--card-2) 10px,
-    #20242f 10px,
-    #20242f 20px
+    var(--card) 10px,
+    var(--card) 20px
   );
 }
 
