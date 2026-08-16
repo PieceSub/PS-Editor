@@ -52,11 +52,78 @@ header {
 }
 
 .logo {
-  width: 220px;
+  width: 110px;
   max-width: 100%;
   height: auto;
   object-fit: contain;
   display: block;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+@property --alpha-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.alpha-badge {
+  position: relative;
+  align-self: center;
+  padding: 6px 18px;
+  border-radius: 999px;
+  background: rgba(12, 12, 14, 0.85);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  user-select: none;
+  white-space: nowrap;
+  box-shadow: 0 0 10px rgba(217, 37, 37, 0.25);
+  color: #ff4d4d;
+  text-shadow: 0 0 6px rgba(255, 77, 77, 0.45);
+}
+
+.alpha-badge::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 999px;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--alpha-angle),
+    transparent 0deg,
+    #ff3b3b 40deg,
+    rgba(255, 59, 59, 0.35) 90deg,
+    transparent 130deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: alpha-ring-spin 2.2s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes alpha-ring-spin {
+  to {
+    --alpha-angle: 360deg;
+  }
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 header h1 {
