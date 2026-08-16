@@ -44,6 +44,8 @@ from typing import Any, Callable
 from ocr_prototype import ComicTextDetector, crop_region, load_image, nms
 from inpaint_prototype import (
     apply_bubble_guard,
+    build_bubble_outline_mask,
+    build_bubble_junk_mask,
     build_text_mask,
     dilate_mask,
     inpaint_lama,
@@ -581,9 +583,14 @@ def translate_page_pipeline(
     orig_np = __import__("numpy").asarray(image)
     h_img, w_img = orig_np.shape[:2]
     if bubbles and s.inpaint_bubble_margin > 0:
+        # Gercek cizgi piksellerini bul (fat band yerine): balon cizgisi
+        # korunur, cizgi bandina tasan metin pikselleri de silinir.
+        b_line = build_bubble_outline_mask(orig_np, bubbles)
+        b_junk = build_bubble_junk_mask(orig_np, bubbles)
         mask = apply_bubble_guard(
             w_img, h_img, bubbles, s.inpaint_bubble_margin, text_regions,
-            dilate=s.inpaint_dilate, ring_width=s.inpaint_ring_width)
+            dilate=s.inpaint_dilate, ring_width=s.inpaint_ring_width,
+            outline=b_line, junk_mask=b_junk)
     else:
         mask = build_text_mask(w_img, h_img, text_regions)
         if s.inpaint_dilate > 0:

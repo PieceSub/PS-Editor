@@ -153,6 +153,119 @@ def dilate_mask(mask: np.ndarray, px: int) -> np.ndarray:
     return cv2.dilate(mask, k)
 
 
+def _line_run_stats(bw: int, bh: int, rw: int,
+                    cw: int, ch: int, area: int,
+                    min_run: float = 0.35,
+                    max_spec_area: int = 50,
+                    max_spec_dim: int = 12) -> str:
+    """Band bileseni icin siniflandirma: 'line' / 'spec' / 'other'.
+
+    Cizgi (line): balon cevresi boyunca uzanan kosu. Esik, kutu boyutuna
+    degil BANDIN GORULEN UZUNLUGUNA (exposure = max(bw,bh) - 2*rw) gore
+    kurulur: dikdortgen balonun SOL/SAG kenar cizgisi, band duzeyinde en
+    fazla bh-2rw kadar gorunur; tam balon genisligine esitlenen bir esik
+    (eski max(bw,bh)*min_run) bu parcalari 'cizgi degil' sayip junk'a
+    atiyordu ve cizgiyi yiyordu (or. 14x85 yan segment).
+
+    Spek (spec): line olmayan ve cok kucuk (alan < 50, en buyuk dim <= 12)
+    izole koyu nokta/kirinti — damga kosesindeki karartilar gibi. Bunlar
+    gercek cizginin disinda kalir ve maske edilmelidir (junk).
+
+    Other: ne cizgi ne spek; maske edilmez, korunur.
+    """
+    exposure = max(bw, bh) - 2 * rw
+    if max(cw, ch) >= max(exposure, 1) * min_run and area >= 30:
+        return "line"
+    if area < max_spec_area and max(cw, ch) <= max_spec_dim:
+        return "spec"
+    return "other"
+
+
+def build_bubble_junk_mask(img_rgb: np.ndarray,
+                           bubbles: list[dict],
+                           ring_frac: float = 0.10,
+                           ink_thr: int = 170,
+                           min_run: float = 0.35) -> np.ndarray | None:
+    """Ring bandindaki cizgi-olmayan KOYU SPEKLER (maske turu).
+
+    build_bubble_outline_mask'in tamamlayicisi: cizgi bandinda kalan ve
+    gercek cizginin hicbir parcasina ait olmayan kucuk koyu kirintilar
+    (kose karartisi, anti-aliasing artigi, yuk tasan glif parcalari).
+    Bunlar hicbir metin bolgesi tarafindan maskelenmedigi icin goruntude
+    koyu kalinti olarak kalir (or. dekoratif damga kutusunun kosesindeki
+    karartilar). Bu fonksiyon yalnizca 'spec' sinifini maske adayi yapar;
+    cizgi parcalari ve belirsiz icerik (other) KORUNUR.
+    """
+    if not bubbles:
+        return None
+    gray = img_rgb.mean(axis=2)
+    h, w = gray.shape
+    out = np.zeros((h, w), dtype=np.uint8)
+    for b in bubbles:
+        x1, y1, x2, y2 = b["bbox"]
+        bw, bh = x2 - x1, y2 - y1
+        if bw <= 0 or bh <= 0:
+            continue
+        rw = adaptive_ring_width(bw, bh, ring_frac)
+        band = np.zeros((h, w), dtype=np.uint8)
+        cv2.rectangle(band, (x1, y1), (x2, y2), 255, -1)
+        cv2.rectangle(band, (x1 + rw, y1 + rw), (x2 - rw, y2 - rw), 0, -1)
+        ink = ((gray < ink_thr) & (band > 0)).astype(np.uint8)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        for i in range(1, n):
+            bx, by, cw, ch, area = stats[i]
+            if _line_run_stats(bw, bh, rw, cw, ch, area,
+                               min_run=min_run) == "spec":
+                out[labels == i] = 255
+    return out
+
+
+def build_bubble_outline_mask(img_rgb: np.ndarray,
+                              bubbles: list[dict],
+                              ring_frac: float = 0.10,
+                              ink_thr: int = 170,
+                              min_run: float = 0.35,
+                              dilate_px: int = 3) -> np.ndarray | None:
+    """Balon cizgisinin GERCEK piksel konumu (tahmini band degil).
+
+    Sorunun kok nedeni: 'cizgi bandini' korusun diye tum ringi (0..rw)
+    maske disinda birakmak, glyf piksellerini de (cizgi 4-14px'teyken
+    14-21px'te kalan) koruyup temizlikten kaciriyordu. Bu fonksiyon:
+      - Her balonun ring bandindaki (kenardan 0..rw) koyu pikselleri bulur,
+      - 8-bagiantili bilesenlerden balon cevresinin onemli bir bolumunu
+        kaplayan UZUN kosular (cizgi) kalir; kisa glif kirintilari elenir,
+      - Sonuc 3px kadar genisletilir (maske ayiklamasi payi).
+    Cikti: cizgi pikselleri maske (uint8). Bubbles yoksa None.
+    """
+    if not bubbles:
+        return None
+    gray = img_rgb.mean(axis=2)
+    h, w = gray.shape
+    out = np.zeros((h, w), dtype=np.uint8)
+    for b in bubbles:
+        x1, y1, x2, y2 = b["bbox"]
+        bw, bh = x2 - x1, y2 - y1
+        if bw <= 0 or bh <= 0:
+            continue
+        rw = adaptive_ring_width(bw, bh, ring_frac)
+        band = np.zeros((h, w), dtype=np.uint8)
+        cv2.rectangle(band, (x1, y1), (x2, y2), 255, -1)
+        cv2.rectangle(band, (x1 + rw, y1 + rw), (x2 - rw, y2 - rw), 0, -1)
+        ink = ((gray < ink_thr) & (band > 0)).astype(np.uint8)
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+        for i in range(1, n):
+            bx, by, cw, ch, area = stats[i]
+            # balon cevresi boyunca uzanan kosu: gercek cizgi
+            if _line_run_stats(bw, bh, rw, cw, ch, area,
+                               min_run=min_run) == "line":
+                out[labels == i] = 255
+    if dilate_px > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                      (2 * dilate_px + 1,) * 2)
+        out = cv2.dilate(out, k)
+    return out
+
+
 def _rect_inter(a: tuple[int, int, int, int],
                 b: tuple[int, int, int, int]) -> int:
     ax1, ay1, ax2, ay2 = a
@@ -188,7 +301,9 @@ def apply_bubble_guard(w: int, h: int, bubbles: list[dict],
                        regions: list[dict],
                        dilate: int = 0,
                        ring_width: int = 0,
-                       inside_frac: float = 0.5) -> np.ndarray:
+                       inside_frac: float = 0.5,
+                       outline: np.ndarray | None = None,
+                       junk_mask: np.ndarray | None = None) -> np.ndarray:
     """Balon cizgisini korurken metni tamamen maskeleyen bolge-bazli guard.
 
     Her balon kutusu kenarlarindan min(min_side * margin_frac, min_px)
@@ -203,11 +318,11 @@ def apply_bubble_guard(w: int, h: int, bubbles: list[dict],
       - Metin bolgesi AGIRLIKLI olarak bir balonun icindeyse
         (kesisim / alan >= inside_frac): maskesi ic bolgeyle sinirlanir,
         ardindan orijinal bbox'i geri eklenir (glif kaybi olmaz) — ANCAK
-        geri eklenen kisim cizgi bandindan (ring) arindirilir. Boylece
-        uzun/balona yakin metin kutularinin balon cizgisinin uzerine
-        tasan maskesi cizgiyi silmez (kesik gorunumun kok nedeni).
+        geri eklenen kisim cizgiden arindirilir. 'outline' verilirse
+        yalnizca GERCEK cizgi pikselleri (build_bubble_outline_mask)
+        korunur; verilmezse tum ring bandi (0..rw) korunur (eski davranis).
       - Balon sinirlarini asan serbest metin (SFX vb.): maskesi yalnizca
-        balonlarin 'cizgi bandindan' arindirilir; balon icinde ve disinda
+        cizgi piksellerinden arindirilir; balon icinde ve disinda
         tamamen maskelenebilir -> balon ustune binen SFX bile silinir.
 
     Onemli: islem global degil, bolge bazli birlesimdir.
@@ -253,30 +368,52 @@ def apply_bubble_guard(w: int, h: int, bubbles: list[dict],
 
         if best_i >= 0 and best_inter / rb_area >= inside_frac:
             # Balon icindeki metin: ic bolge + orijinal bbox. Geri eklenen
-            # bbox, balonun 'cizgi bandindan' (ring) arindirilir: uzun
-            # metin kutularinin balon cizgisinin uzerine tasmasi durumunda
-            # maske cizgiyi yemez (kesik/gorunmez cizgi hatasi).
+            # bbox, cizgiden arindirilir: uzun metin kutularinin balon
+            # cizgisine tasmasi durumunda maske cizgiyi yemez
+            # (kesik/gorunmez cizgi hatasi).
             ib = inner_boxes[best_i]
             inner = np.zeros((h, w), dtype=np.uint8)
             cv2.rectangle(inner, (ib[0], ib[1]), (ib[2], ib[3]), 255, -1)
             rmask = cv2.bitwise_and(rmask, inner)
             cv2.rectangle(rmask, (rb[0], rb[1]), (rb[2], rb[3]), 255, -1)
-            rmask = cv2.bitwise_and(rmask, cv2.bitwise_not(rings[best_i]))
+            if outline is not None:
+                rmask = cv2.bitwise_and(rmask, cv2.bitwise_not(outline))
+            else:
+                rmask = cv2.bitwise_and(rmask, cv2.bitwise_not(rings[best_i]))
         else:
-            # Serbest metin: yalnizca balon cizgi bandi korunur
-            for ring in rings:
-                rmask = cv2.bitwise_and(rmask, cv2.bitwise_not(ring))
+            # Serbest metin: yalnizca cizgi pikselleri korunur
+            if outline is not None:
+                rmask = cv2.bitwise_and(rmask, cv2.bitwise_not(outline))
+            else:
+                for ring in rings:
+                    rmask = cv2.bitwise_and(rmask, cv2.bitwise_not(ring))
 
         out = cv2.bitwise_or(out, rmask)
 
     # Hiyerarsik balonlar (kucuk balon buyuk balonun cizgi bandi icinde):
-    # bolge bazli kliplere guvenilmez — HICBIR balonun cizgi bandina maske
-    # tasamaz. (Ic-bolge kolu kendi balonunun ringiyle kliplenir, ama bir
-    # balonun icindeki metin komsu/buyuk balonun bandina ulasabilir.)
-    union_rings = np.zeros((h, w), dtype=np.uint8)
-    for ring in rings:
-        union_rings = cv2.bitwise_or(union_rings, ring)
-    out = cv2.bitwise_and(out, cv2.bitwise_not(union_rings))
+    # HICBIR balonun cizgisine maske tasamaz. Bagdastirici: outline yoksa
+    # bandlarin birlesimi (eski davranis), varsa gercek cizgi pikselleri.
+    if outline is not None:
+        out = cv2.bitwise_and(out, cv2.bitwise_not(outline))
+    else:
+        union_rings = np.zeros((h, w), dtype=np.uint8)
+        for ring in rings:
+            union_rings = cv2.bitwise_or(union_rings, ring)
+        out = cv2.bitwise_and(out, cv2.bitwise_not(union_rings))
+
+    # Banddaki cizgi-olmayan kirintilar maske adayidir: hicbir metin
+    # bolgesi kapsamadigi icin bunlar bastan beri goruntude kalirdi.
+    if junk_mask is not None:
+        out = cv2.bitwise_or(out, junk_mask)
+    # Son adim her zaman cizgi korumasidir: junk bile cizgiden (dilate
+    # payi dahil) arindirilir — cizgi asla maskelenmez.
+    if outline is not None:
+        out = cv2.bitwise_and(out, cv2.bitwise_not(outline))
+    elif junk_mask is None:
+        union_rings = np.zeros((h, w), dtype=np.uint8)
+        for ring in rings:
+            union_rings = cv2.bitwise_or(union_rings, ring)
+        out = cv2.bitwise_and(out, cv2.bitwise_not(union_rings))
     return out
 
 
