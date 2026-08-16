@@ -13,8 +13,8 @@ python/.env
 __pycache__/
 *.pyc
 
-# Sidecar derlemeleri (tauri.conf.json externalBin tarafından beklense de
-# dosya olarak repo'ya girmez; her platformda ayrı derlenir)
+# Sidecar derlemeleri (tauri.conf.json resources tarafından beklense de
+# klasör olarak repo'ya girmez; her platformda ayrı derlenir)
 src-tauri/binaries/
 
 # Python test çıktıları

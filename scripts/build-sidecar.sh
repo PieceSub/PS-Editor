@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PS Editor - Python sidecar'ı PyInstaller ile derler (Linux/macOS).
-# Çıktı: src-tauri/binaries/python-sidecar-<target-triple>
-# Tauri'nin externalBin yapılandırması bu isimlendirmeyi bekler.
+# Çıktı: src-tauri/binaries/python-sidecar/ (onedir: exe + _internal/)
+# Tauri bu dizini bundle.resources ile $RESOURCE/sidecar/ altına taşır.
 # Kullanım: ./scripts/build-sidecar.sh [--clean]
 set -euo pipefail
 
@@ -34,16 +34,17 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-FINAL="$OUT_DIR/python-sidecar-$TRIPLE"
-if [ "$CLEAN" -eq 1 ] && [ -e "$FINAL" ]; then
-    rm -f "$FINAL"
-fi
+# Eski tek dosya (onefile) kalıntılarını ve onedir çıktısını sıfırla.
+rm -rf "$OUT_DIR/python-sidecar"
+rm -f "$OUT_DIR/python-sidecar-$TRIPLE"
 
 echo "==> PyInstaller ile derleniyor (target: $TRIPLE)..."
 # Not: --add-data ayracı platforma göre değişir (Windows ';' , Linux/macOS ':')
+# onedir: her çalıştırmada /tmp'e 2.8GB ayıklama yapmaz (onefile'ın _MEI*
+# çöpü sorunu); Tauri tarafı dizini resource olarak paketler.
 "$PYTHON" -m PyInstaller \
     -n python-sidecar \
-    --onefile \
+    --onedir \
     --clean \
     --distpath "$OUT_DIR" \
     --workpath "$PROJECT_ROOT/python/build" \
@@ -53,12 +54,22 @@ echo "==> PyInstaller ile derleniyor (target: $TRIPLE)..."
     --add-data "$PROJECT_ROOT/python/fonts:fonts" \
     "$SCRIPT"
 
-if [ -e "$FINAL" ]; then
-    rm -f "$FINAL"
+if [ ! -x "$OUT_DIR/python-sidecar/python-sidecar" ]; then
+    echo "HATA: onedir çıktısı beklenen konumda değil: $OUT_DIR/python-sidecar/python-sidecar" >&2
+    exit 1
 fi
-mv "$OUT_DIR/python-sidecar" "$FINAL"
 
 echo ""
-echo "Sidecar hazır: $FINAL"
-echo "Bilinen sorun: src-tauri/target içindeki önbellek güncellenmezse eski binary paketlenebilir."
-echo "Emin olmak için: npm run tauri build öncesinde src-tauri/target/release/python-sidecar dosyasını silin."
+echo "Sidecar hazır: $OUT_DIR/python-sidecar/"
+echo "Kurulum dizini büyüktür (~ayıklanmış içerik), ama /tmp kullanımı SIFIR."
+
+# Eski derleme notu: Tauri önbelleği güncellenmezse eski dosya paketlenebilir
+# (tauri#15134). Eski externalBin kopyaları (target/<profil>/python-sidecar)
+# artık kullanılmıyor; resource kopyaları (sidecar/ dizini) dokunulmaz.
+find "$PROJECT_ROOT/src-tauri/target" -maxdepth 2 -type f -name "python-sidecar" -delete 2>/dev/null || true
+if [ -e "$PROJECT_ROOT/src-tauri/target/debug/python-sidecar.exe" ]; then
+    rm -f "$PROJECT_ROOT/src-tauri/target/debug/python-sidecar.exe"
+fi
+if [ -e "$PROJECT_ROOT/src-tauri/target/release/python-sidecar.exe" ]; then
+    rm -f "$PROJECT_ROOT/src-tauri/target/release/python-sidecar.exe"
+fi

@@ -54,8 +54,8 @@ $env:PS_EDITOR_PY_SOURCE = "venv"   # Rust tarafı venv Python'u kullanır
 npm.cmd run tauri dev
 ```
 
-Bunun çalışabilmesi için `src-tauri/binaries/` içinde binary bulunmalıdır (tauri-build derleme
-aşamasında `externalBin` dosyasının varlığını zorunlu tutar).
+Bunun çalışabilmesi için `src-tauri/binaries/` içinde sidecar bulunmalıdır (tauri-build derleme
+aşamasında `resources` altındaki `binaries/python-sidecar/` dizininin varlığını zorunlu tutar).
 
 ---
 
@@ -63,9 +63,10 @@ aşamasında `externalBin` dosyasının varlığını zorunlu tutar).
 
 **Seçim: stdin/stdout üzerinden JSON Lines (NDJSON).** Neden HTTP port değil:
 
-1. Tauri'nin sidecar mekanizması (`tauri-plugin-shell`) stdin/stdout pipe'larını doğal olarak
-   yönetir (`CommandEvent::Stdout/Stderr`) — ekstra ayar, port, CORS veya firewall izni gerekmez.
-2. Dev (venv python) ve prod (PyInstaller exe) modlarında **aynı kod yolu** kullanılır.
+1. Doğrudan pipe yönetimi (`std::process::Command` + okuma iş parçacığı) ekstra bağımlılık
+   gerektirmez; sidecar **onedir** paketlendiği için çalıştırma yolu da tamamen bizim
+   kontrolümüzdedir (resource dizini).
+2. Dev (venv python) ve prod (PyInstaller onedir) modlarında **aynı kod yolu** kullanılır.
 3. Hayat döngüsü (başlat/kapat) Tauri'ye aittir; süreç kapanınca Tauri bunu fark eder.
 
 İleride FastAPI eklendiğinde: stdin/stdout **kontrol kanalı** (start/stop/health/ping) olarak
@@ -87,11 +88,18 @@ Olay (push):                      {"event": "ready", "payload": {...}}
 
 ### Sidecar yapılandırması
 
-- `src-tauri/tauri.conf.json` → `bundle.externalBin: ["binaries/python-sidecar"]`
-  (dosya adı `python-sidecar-<target-triple>.exe` olmalı; tauri-build derlemede varlığını zorunlu tutar).
-- İzinler: `src-tauri/capabilities/default.json` → `shell:allow-spawn` + `sidecar: true`.
-- Rust: `app.shell().sidecar("python-sidecar")`; fallback olarak `PS_EDITOR_PY_SOURCE=venv`
-  ile `python/.venv/Scripts/python.exe python/sidecar.py`.
+- **PyInstaller modu: onedir** (onefile değil). onefile her başlatılışta ~4.7 GB'ı geçici
+  dizine (/tmp, %TEMP%) ayıklar; force-kill/çökme sonrası bu `_MEI*` dizinleri temizlenmeden
+  birikip alanı doldurur. onedir hiç ayıklama yapmaz; sidecar `src-tauri/binaries/python-sidecar/`
+  klasöründe derlenir (exe + `_internal/`).
+- `src-tauri/tauri.conf.json` → `bundle.resources: {"binaries/python-sidecar/": "sidecar/"}`
+  (derleme öncesi `npm run sidecar:build` gerekir; tauri-build varlığını zorunlu tutar).
+- Rust: `$RESOURCE/sidecar/python-sidecar` yolundan `std::process::Command` ile başlatılır;
+  fallback olarak `PS_EDITOR_PY_SOURCE=venv` ile `python/.venv/Scripts/python.exe python/sidecar.py`.
+- Savunma: `sidecar.py` main() başında geçici dizindeki öksüz `_MEI*` kalıntılarını temizler
+  (kendi dizinini, canlı süreçlerin dizinlerini, genç dizinleri ve symlink'leri asla silmez;
+  `PS_EDITOR_MEI_MAX_AGE_SECONDS` eşiği geçersiz kılar). Böylece eski onefile kalıntıları
+  sonraki başlatılışta otomatik temizlenir.
 
 ---
 
@@ -116,13 +124,13 @@ PS-Editor/
 │   └── requirements.txt      # OCR + inpainting bağımlılıkları
 ├── scripts/
 │   ├── setup-python.ps1      # venv oluştur
-│   └── build-sidecar.ps1     # PyInstaller -> src-tauri/binaries/python-sidecar-<triple>.exe
+│   └── build-sidecar.ps1     # PyInstaller onedir -> src-tauri/binaries/python-sidecar/
 └── src-tauri/
-    ├── tauri.conf.json       # externalBin, pencere, kimlik
+    ├── tauri.conf.json       # resources (sidecar klasörü), pencere, kimlik
     ├── Cargo.toml
     ├── capabilities/default.json
     ├── icons/                # tauri icon ile üretildi
-    ├── binaries/             # sidecar exe (gitignore'da; her platformda ayrı derlenir)
+    ├── binaries/             # sidecar klasörü (gitignore'da; her platformda ayrı derlenir)
     └── src/
         ├── main.rs
         └── lib.rs            # sidecar süpervizörü: spawn, stdin/stdout, istek eşleştirme
@@ -198,12 +206,13 @@ balon tespiti kaçarsa manuel bbox gerekir.
 
 | Belirti | Çözüm |
 |---|---|
-| `resource path binaries\python-sidecar-... doesn't exist` | `npm.cmd run sidecar:build` (tauri-build derlemede binary ister) |
-| Eski Python kodu çalışıyor (prod) | `src-tauri/target/release/python-sidecar.exe` dosyasını silip yeniden derleyin (tauri-build bu önbelleği güncellemez — [tauri#15134](https://github.com/tauri-apps/tauri/issues/15134)) |
+| `resource path binaries\python-sidecar doesn't exist` | `npm.cmd run sidecar:build` (tauri-build derlemede sidecar klasörünü ister) |
+| Eski Python kodu çalışıyor (prod) | `npm.cmd run sidecar:build` ile yeniden derleyin + `src-tauri/target/release/sidecar` klasörünü silip yeniden derleyin (tauri-build resource önbelleğini güncellemez — [tauri#15134](https://github.com/tauri-apps/tauri/issues/15134)) |
 | `npm` PowerShell'de "scripts disabled" | `npm.cmd` kullanın veya `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | MSI hatası `failed to run light.exe` | Windows "VBSCRIPT" özelliğini açın |
 | Pencere açılıp anında kapanıyor | WebView2 Runtime eksik — kurun |
 | Orphan python-sidecar süreci | Uygulamayı force-kill etmeyin; pencereyi normal kapatın (Exit handler'ı öldürür) |
+| /tmp (veya %TEMP%) `_MEI*` kalıntılarıyla doldu | Sidecar'ı son kez başlatın: `sidecar.py` başlangıçta öksüz kalıntıları otomatik temizler (onedir moduna geçildiği için artık yeni kalıntı oluşmaz) |
 
 ---
 

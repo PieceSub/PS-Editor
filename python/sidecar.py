@@ -29,20 +29,131 @@ API anahtarı/VRAM/model indirme hatalarını okunabilir Türkçe mesaja çeviri
 Not: Bu dosya modül yükleme zamanında ağır bağımlılık (torch/cv2/PIL)
 içermez; pipeline.py yalnızca translate_page çağrıldığında (geç import)
 yüklenir, böylece ping/hello/check_cuda anında çalışır.
+
+PyInstaller modu: sidecar onedir olarak derlenir (bkz. build-sidecar.*),
+yani /tmp'e ayıklama yapılmaz; main() yine de savunma amaçlı geçici
+dizindeki öksüz _MEI* onefile kalıntılarını temizler (_cleanup_stale_mei_dirs).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from datetime import datetime, timezone
 
 # Protokol çıktısı her zaman ORİJİNAL stdout'a yazılır: pipeline sırasında
 # üçüncü taraf print()'leri bastırmak için sys.stdout geçici olarak
 # değiştirilebilir (quiet_stdout), ama JSON satırları bu referanstan akar.
 _STDOUT = sys.stdout
+
+
+def _mei_dir_in_use(mei_path: str) -> bool:
+    """Linux'ta geçici _MEI* dizinini referans eden canlı bir süreç var mı?
+
+    PyInstaller onefile'da çalışan sürecin /proc/<pid>/exe'si, ayıklanan
+    kopyaya (/tmp/_MEIxxx/python-sidecar) işaret eder; torch alt süreçleri
+    de aynı yürütülebiliri paylaşır. Dizin kullanımdayken silmeyi önlemek
+    için tüm süreçlerin exe yolunu bu dizine karşı kontrol ederiz.
+    Windows'ta karşılığı ucuz değildir; orada yalnızca yaş eşiği kullanılır.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    target = os.path.realpath(mei_path) + os.sep
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return False
+    for name in entries:
+        if not name.isdigit():
+            continue
+        try:
+            exe = os.path.realpath(os.path.join("/proc", name, "exe"))
+        except OSError:
+            continue  # süreç arada çıktı / erişim yok
+        if exe.startswith(target):
+            return True
+    return False
+
+
+def _cleanup_stale_mei_dirs(max_age_seconds: int) -> int:
+    """Geçici dizindeki öksüz PyInstaller onefile (_MEI*) klasörlerini temizler.
+
+    onefile modu her başlatılışta geçici dizine (Linux/macOS: $TMPDIR yani
+    /tmp; Windows: %TEMP%) bir _MEIxxxxxx klasörü açar. Normal sonlanmada
+    bootloader bunu siler, ancak force-kill / çökme / sık yeniden başlatma
+    durumlarında kalıntı birikir ve tmpfs gibi sınırlı alanları doldurur.
+    Bu rutin, main() başında (protokol açılmadan) çalışır:
+
+      - Yalnızca doğrudan geçici dizin altındaki "_MEI" önekli dizinler
+        hedeflenir; sembolik bağlar ve yabancı isimler asla dokunulmaz.
+      - Kendi ayıklama dizinimiz (sys._MEIPASS) atlanır.
+      - Linux: dizini referans eden canlı süreç varsa asla silinmez;
+        aksi halde yalnızca yaşı aşanlar silinir (eşik, yeni bir örneğin
+        ayıklama tamamlayıp exec etmesine yetecek güvenlik payıdır).
+      - Windows/diğer: yalnızca yaşı aşanlar silinir (varsayılan 1 saat;
+        canlı örnek koruması için daha temkinli eşik).
+      - PS_EDITOR_MEI_MAX_AGE_SECONDS ortam değişkeni eşiği saniye olarak
+        geçersiz kılar (0 = canlı olmayan her dizini sil).
+
+    Not: onefile'da ayıklama Python başlamadan ÖNCE yapıldığı için tam
+    dolmuş bir geçici dizinde bu rutin çalışamaz; asıl çözüm onedir
+    modudur (bkz. python-sidecar.spec / build-sidecar.*) — orada hiç _MEI*
+    açılmaz ve bu fonksiyon yalnızca eski/tek seferlik onefile derlemelerinin
+    kalıntılarını temizler. Döndürür: silinen dizin sayısı.
+    """
+    env_override = os.environ.get("PS_EDITOR_MEI_MAX_AGE_SECONDS")
+    if env_override is not None:
+        try:
+            max_age_seconds = int(env_override)
+        except ValueError:
+            pass  # geçersiz değer: varsayılan eşik kalsın
+
+    tmp_root = tempfile.gettempdir()
+    own = getattr(sys, "_MEIPASS", None)
+    own_real = os.path.realpath(own) if own else None
+    now = time.time()
+    removed = 0
+    failed = 0
+
+    try:
+        entries = os.listdir(tmp_root)
+    except OSError:
+        return 0
+    for name in entries:
+        if not name.startswith("_MEI"):
+            continue
+        path = os.path.join(tmp_root, name)
+        try:
+            if os.path.islink(path) or not os.path.isdir(path):
+                continue
+            if own_real and os.path.realpath(path) == own_real:
+                continue
+            age = now - os.stat(path).st_mtime
+            if age < max_age_seconds:
+                continue
+            if _mei_dir_in_use(path):
+                continue
+        except OSError:
+            continue
+        try:
+            shutil.rmtree(path)
+            removed += 1
+            print(f"[sidecar] öksüz ayıklama dizini temizlendi: {path}", file=sys.stderr)
+        except OSError:
+            failed += 1
+
+    if removed or failed:
+        print(
+            f"[sidecar] geçici dizin bakımı: {removed} silindi, "
+            f"{failed} silinemedi ({tmp_root})",
+            file=sys.stderr,
+        )
+    return removed
 
 
 def write_message(obj: dict) -> None:
@@ -339,6 +450,15 @@ def main() -> int:
                                line_buffering=True)
         except Exception:  # noqa: BLE001 - sözlük/consol gibi akışlar değişemez
             pass
+
+    # Force-kill / çökme sonrası biriken öksüz _MEI* ayıklama dizinlerini
+    # temizle (bkz. _cleanup_stale_mei_dirs). Eşik: Linux'ta canlı süreç
+    # kontrolü olduğu için düşük (120 sn), Windows'ta canlı örneği korumak
+    # adına yüksek (1 saat); PS_EDITOR_MEI_MAX_AGE_SECONDS ile geçersiz
+    # kılınabilir.
+    default_max_age = 120 if sys.platform.startswith("linux") else 3600
+    _cleanup_stale_mei_dirs(default_max_age)
+
     write_message({"event": "ready", "payload": {"version": "0.2.0"}})
 
     for line in sys.stdin:

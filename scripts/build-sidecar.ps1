@@ -1,6 +1,6 @@
-# PS Editor - Python sidecar'ı PyInstaller ile derler.
-# Çıktı: src-tauri/binaries/python-sidecar-<target-triple>.exe
-# Tauri'nin externalBin yapılandırması bu isimlendirmeyi bekler.
+# PS Editor - Python sidecar'ı PyInstaller ile derler (Windows).
+# Çıktı: src-tauri/binaries/python-sidecar/ (onedir: python-sidecar.exe + _internal/)
+# Tauri bu dizini bundle.resources ile $RESOURCE/sidecar/ altına taşır.
 param([switch]$Clean)
 $ErrorActionPreference = "Stop"
 
@@ -24,14 +24,20 @@ if (-not $triple) {
 
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
-if ($Clean -and (Test-Path (Join-Path $outDir "python-sidecar-$triple.exe"))) {
+# Eski tek dosya (onefile) kalıntılarını ve onedir çıktısını sıfırla.
+if (Test-Path (Join-Path $outDir "python-sidecar")) {
+    Remove-Item (Join-Path $outDir "python-sidecar") -Recurse -Force
+}
+if (Test-Path (Join-Path $outDir "python-sidecar-$triple.exe")) {
     Remove-Item (Join-Path $outDir "python-sidecar-$triple.exe") -Force
 }
 
 Write-Host "==> PyInstaller ile derleniyor (target: $triple)..."
+# onedir: her çalıştırmada %TEMP%'e ayıklama yapmaz (onefile'ın _MEI*
+# çöpü sorunu); Tauri tarafı dizini resource olarak paketler.
 $pyiArgs = @(
     "-n", "python-sidecar",
-    "--onefile",
+    "--onedir",
     "--clean",
     "--distpath", $outDir,
     "--workpath", (Join-Path $projectRoot "python\build"),
@@ -44,13 +50,18 @@ $pyiArgs = @(
 & $python -m PyInstaller @pyiArgs
 if (-not $?) { exit 1 }
 
-$final = Join-Path $outDir "python-sidecar-$triple.exe"
-if (Test-Path $final) {
-    Remove-Item $final -Force
+if (-not (Test-Path (Join-Path $outDir "python-sidecar\python-sidecar.exe"))) {
+    Write-Error "HATA: onedir çıktısı beklenen konumda değil: $outDir\python-sidecar\python-sidecar.exe"
 }
-Rename-Item (Join-Path $outDir "python-sidecar.exe") -NewName "python-sidecar-$triple.exe"
 
 Write-Host ""
-Write-Host "Sidecar hazır: $final"
-Write-Host "Bilinen sorun: src-tauri/target içindeki önbellek güncellenmezse eski binary paketlenebilir."
-Write-Host "Emin olmak için: npm run tauri build öncesinde src-tauri\target\release\python-sidecar.exe dosyasını silin."
+Write-Host "Sidecar hazır: $outDir\python-sidecar\"
+Write-Host "Kurulum dizini büyüktür (~ayıklanmış içerik), ama %TEMP% kullanımı SIFIR."
+
+# Eski derleme notu: Tauri önbelleği güncellenmezse eski dosya paketlenebilir
+# (tauri#15134). Eski externalBin kopyaları (target\<profil>\python-sidecar.exe)
+# artık kullanılmıyor; resource kopyaları (sidecar\ dizini) dokunulmaz.
+foreach ($profile in @("debug", "release")) {
+    $stale = Join-Path (Join-Path $projectRoot "src-tauri\target\$profile") "python-sidecar.exe"
+    if (Test-Path $stale) { Remove-Item $stale -Force }
+}

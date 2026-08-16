@@ -9,8 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_shell::process::{CommandChild, CommandEvent};
-use tauri_plugin_shell::ShellExt;
+use tauri::path::BaseDirectory;
 
 mod projects;
 
@@ -18,42 +17,30 @@ mod projects;
 ///
 /// Mimari karar: Tauri ile Python arasındaki iletişim, stdin/stdout üzerinden
 /// JSON Lines protokolüyle yapılır. Bunun yerine yerel HTTP portu seçmedik çünkü:
-///  1. Tauri'nin sidecar mekanizması (tauri-plugin-shell) stdin/stdout pipe'larını
-///     doğal olarak yönetir (CommandEvent::Stdout/Stderr) — ekstra ayar gerektirmez.
+///  1. Doğrudan pipe yönetimi (tauri-plugin-shell yerine std::process) ekstra
+///     bağımlılık gerektirmez; sidecar onedir olarak paketlendiğinden çalıştırma
+///     yolu da tamamen bizim kontrolümüzdedir (resource dizini).
 ///  2. Port çakışması, CORS, firewall izni, localhost güvenlik endişesi yoktur.
-///  3. Dev (venv python) ve prod (PyInstaller exe) modlarında aynı kod yolu kullanılır.
+///  3. Dev (venv python) ve prod (PyInstaller onedir) modlarında aynı kod yolu kullanılır.
 /// İleride FastAPI eklendiğinde: stdin/stdout kontrol kanalı (start/stop/health)
 /// olarak kalır, büyük veri (OCR/çeviri) HTTP üzerinden akar — topluluktaki
 /// yerleşik desen budur (ör. dieharders/example-tauri-v2-python-server-sidecar).
-enum PyProcess {
-    /// Üretim modu: paketlenmiş sidecar binary'si (tauri-plugin-shell).
-    Shell { child: CommandChild },
-    /// Geliştirme modu: venv'deki python + sidecar.py kaynak dosyası.
-    Std { child: std::process::Child },
+struct PyProcess {
+    child: std::process::Child,
 }
 
 impl PyProcess {
     fn write_line(&mut self, line: &str) -> Result<(), String> {
-        match self {
-            Self::Shell { child } => child.write(line.as_bytes()).map_err(|e| e.to_string()),
-            Self::Std { child } => child
-                .stdin
-                .as_mut()
-                .ok_or_else(|| "çocuk sürecin stdin'i yok".to_string())?
-                .write_all(line.as_bytes())
-                .map_err(|e| e.to_string()),
-        }
+        self.child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "çocuk sürecin stdin'i yok".to_string())?
+            .write_all(line.as_bytes())
+            .map_err(|e| e.to_string())
     }
 
-    fn kill(self) {
-        match self {
-            Self::Shell { child } => {
-                let _ = child.kill();
-            }
-            Self::Std { mut child } => {
-                let _ = child.kill();
-            }
-        }
+    fn kill(mut self) {
+        let _ = self.child.kill();
     }
 }
 
@@ -114,8 +101,8 @@ fn handle_line(app: &AppHandle, state: &PyState, bytes: &[u8]) {
     }
 }
 
-/// Python sidecar'ını başlatır. Önce paketlenmiş binary'yi (prod), bulamazsa
-/// venv python'u (dev) dener.
+/// Python sidecar'ını başlatır. Önce paketlenmiş onedir binary'yi (prod),
+/// bulamazsa venv python'u (dev) dener.
 fn spawn_python(app: &AppHandle, state: &Arc<PyState>) -> Result<(), String> {
     // Geliştirme kısayolu: PS_EDITOR_PY_SOURCE=venv ortam değişkeni, PyInstaller
     // derlemesi beklemeden doğrudan sanal ortamdaki Python'u kullanmayı sağlar
@@ -124,52 +111,76 @@ fn spawn_python(app: &AppHandle, state: &Arc<PyState>) -> Result<(), String> {
         return spawn_python_dev(app, state);
     }
 
-    // 1) Üretim: bundle.externalBin -> src-tauri/binaries/python-sidecar-<triple>.exe
-    if let Ok(command) = app
-        .shell()
-        // Konsol kod sayfasına (chcp) bağımlı kalmadan UTF-8 zorla:
-        // PYTHONIOENCODING stdin/stdout/stderr'ı geleceğe dönük olarak
-        // UTF-8'e sabitler, PYTHONUTF8 ise PEP 540 UTF-8 modunu açar.
-        .sidecar("python-sidecar")
-        .map(|cmd| cmd.env("PYTHONIOENCODING", "utf-8").env("PYTHONUTF8", "1"))
-    {
-        match command.spawn() {
-            Ok((mut rx, child)) => {
-                state.attach(PyProcess::Shell { child });
-                let handle = app.clone();
-                let task_state = state.clone();
-                tauri::async_runtime::spawn(async move {
-                    while let Some(event) = rx.recv().await {
-                        match event {
-                            CommandEvent::Stdout(line) => {
-                                handle_line(&handle, &task_state, &line)
-                            }
-                            CommandEvent::Stderr(line) => {
-                                eprintln!("[sidecar stderr] {}", String::from_utf8_lossy(&line))
-                            }
-                            CommandEvent::Error(e) => eprintln!("[sidecar error] {e}"),
-                            CommandEvent::Terminated(p) => {
-                                println!("[sidecar] süreç sonlandı: {:?}", p.code);
-                                let _ = handle.emit(
-                                    "python-event",
-                                    json!({ "name": "exit", "payload": format!("kod {:?}", p.code) }),
-                                );
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                });
-                println!("[sidecar] paketlenmiş binary ile başlatıldı");
+    // 1) Üretim: onedir sidecar, bundle.resources ile $RESOURCE/sidecar/
+    //    altına paketlenir (bkz. tauri.conf.json). onedir modu /tmp'e (Linux)
+    //    / %TEMP%'e (Windows) ayıklama yapmaz — PyInstaller'ın birikip geçici
+    //    alanı dolduran _MEI* çöpü sorunu kökten çözülür.
+    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+    let sidecar_path = app
+        .path()
+        .resolve(format!("sidecar/python-sidecar{exe_suffix}"), BaseDirectory::Resource)
+        .map_err(|e| format!("Sidecar yolu çözümlenemedi: {e}"))?;
+    if sidecar_path.is_file() {
+        match spawn_python_command(app, state, &sidecar_path, &[]) {
+            Ok(()) => {
+                println!("[sidecar] paketlenmiş onedir binary ile başlatıldı: {}", sidecar_path.display());
                 return Ok(());
             }
             Err(e) => {
                 eprintln!("[sidecar] paketli binary başlatılamadı ({e}); dev moduna geçiliyor…");
             }
         }
+    } else {
+        eprintln!(
+            "[sidecar] paketli binary bulunamadı ({}); dev moduna geçiliyor…",
+            sidecar_path.display()
+        );
     }
 
     spawn_python_dev(app, state)
+}
+
+/// Yürütülebilir + isteğe bağlı argümanlarla sidecar sürecini başlatır ve
+/// stdout'u okuyan arka plan iş parçacığını kurar (prod ve dev ortak yol).
+fn spawn_python_command(
+    app: &AppHandle,
+    state: &Arc<PyState>,
+    exe: &std::path::Path,
+    args: &[&str],
+) -> Result<(), String> {
+    let mut child = std::process::Command::new(exe)
+        .args(args)
+        // Unicode yollar için stdin/stdout UTF-8'e sabitlenmeli; aksi halde
+        // Windows ANSI kod sayfası (cp125x) devreye girip UTF-8 baytlarını
+        // bozar (ör. "Masaüstü" -> "MasaÃ¼stÃ¼").
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONUTF8", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("Sidecar başlatılamadı: {e}"))?;
+
+    let stdout = child.stdout.take().ok_or("çocuk sürecin stdout'u alınamadı")?;
+    state.attach(PyProcess { child });
+    let handle = app.clone();
+    let task_state = state.clone();
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            match line {
+                Ok(line) => handle_line(&handle, &task_state, line.as_bytes()),
+                Err(e) => {
+                    eprintln!("[sidecar] stdout okuma hatası: {e}");
+                    break;
+                }
+            }
+        }
+        let _ = handle.emit("python-event", json!({ "name": "exit", "payload": "stdout kapandı" }));
+    });
+
+    Ok(())
 }
 
 /// Geliştirme modu: python/.venv + sidecar.py kaynak dosyası.
@@ -188,39 +199,11 @@ fn spawn_python_dev(app: &AppHandle, state: &Arc<PyState>) -> Result<(), String>
         ));
     }
     let script = Path::new(manifest).join("..").join("python").join("sidecar.py");
+    let script = script
+        .to_str()
+        .ok_or_else(|| "sidecar.py yolu UTF-8'e çevrilemedi".to_string())?;
 
-    let mut child = std::process::Command::new(&python)
-        .arg(&script)
-        .env("PYTHONUNBUFFERED", "1")
-        // Unicode yollar için stdin/stdout UTF-8'e sabitlenmeli; aksi halde
-        // Windows ANSI kod sayfası (cp125x) devreye girip UTF-8 baytlarını
-        // bozar (ör. "Masaüstü" -> "MasaÃ¼stÃ¼").
-        .env("PYTHONIOENCODING", "utf-8")
-        .env("PYTHONUTF8", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|e| format!("Python başlatılamadı: {e}"))?;
-
-    let stdout = child.stdout.take().ok_or("çocuk sürecin stdout'u alınamadı")?;
-    state.attach(PyProcess::Std { child });
-    let handle = app.clone();
-    let task_state = state.clone();
-    std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            match line {
-                Ok(line) => handle_line(&handle, &task_state, line.as_bytes()),
-                Err(e) => {
-                    eprintln!("[sidecar] stdout okuma hatası: {e}");
-                    break;
-                }
-            }
-        }
-        let _ = handle.emit("python-event", json!({ "name": "exit", "payload": "stdout kapandı" }));
-    });
-
+    spawn_python_command(app, state, &python, &[script])?;
     println!("[sidecar] geliştirme modu (venv python) ile başlatıldı: {}", python.display());
     Ok(())
 }
@@ -330,7 +313,6 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             python_request,
