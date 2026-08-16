@@ -1,0 +1,56 @@
+{
+  "size": [
+    1024,
+    1024
+  ],
+  "items": [
+    {
+      "name": "baslik",
+      "label_name": "text_free",
+      "bbox": [
+        0,
+        0,
+        1024,
+        217
+      ],
+      "decorative": true,
+      "required": false
+    },
+    {
+      "name": "muhur",
+      "label_name": "text_free",
+      "bbox": [
+        575,
+        793,
+        675,
+        893
+      ],
+      "decorative": true,
+      "required": false
+    },
+    {
+      "name": "balon_1",
+      "label_name": "text_bubble",
+      "bbox": [
+        167,
+        378,
+        249,
+        533
+      ],
+      "decorative": false,
+      "required": true
+    },
+    {
+      "name": "balon_2",
+      "label_name": "text_bubble",
+      "bbox": [
+        494,
+        614,
+        576,
+        769
+      ],
+      "decorative": false,
+      "required": true
+    }
+  ]
+}

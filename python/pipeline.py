@@ -41,7 +41,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Callable
 
-from ocr_prototype import ComicTextDetector, crop_region, nms
+from ocr_prototype import ComicTextDetector, crop_region, load_image, nms
 from inpaint_prototype import (
     apply_bubble_guard,
     build_text_mask,
@@ -211,12 +211,20 @@ class Settings:
 
     ocr_conf: float = 0.3
     ocr_force_cpu: bool = False
+    # text_free (serbest metin/SFX/başlık) bölgeleri için güven eşiği:
+    # bu eşiğin ALTINDA kalan text_free adayları editöre "varsayılan kapalı"
+    # (disabled) gider. Kapak sayfalarındaki logo/yayıncı/imza gibi dekoratif
+    # öğeler düşük skorla tespit edilir (ölçüm: 0.41-0.79); gerçek konuşma
+    # balonları text_bubble sınıfındadır ve BU EŞİĞE TABİ DEĞİLDİR (düşük
+    # skorlu gerçek balonları kaçırmamak için).
+    ocr_text_free_min_conf: float = 0.8
 
     inpaint_method: str = "lama"         # lama | opencv
     inpaint_device: str = "auto"         # auto | cuda | cpu
     inpaint_dilate: int = 4
     inpaint_bubble_margin: float = 0.08
-    inpaint_ring_width: int = 10
+    # 0 = adaptif: her balon için kutu boyutuna göre (min_side*%10, 8-32px)
+    inpaint_ring_width: int = 0
     lama_max_side: int = 2048
     no_refine_remnants: bool = False
 
@@ -281,6 +289,7 @@ Settings.ENV = {
     "vram_translation_min_mb": "PS_VRAM_TRANSLATION_MIN_MB",
     "ocr_conf": "PS_OCR_CONF",
     "ocr_force_cpu": "PS_OCR_FORCE_CPU",
+    "ocr_text_free_min_conf": "PS_OCR_TEXT_FREE_MIN_CONF",
     "inpaint_method": "PS_INPAINT_METHOD",
     "inpaint_device": "PS_INPAINT_DEVICE",
     "inpaint_dilate": "PS_INPAINT_DILATE",
@@ -478,7 +487,7 @@ def translate_page_pipeline(
         raise PipelineError(
             f"Gorsel dosyasi bulunamadi: {img_path}", "file_not_found")
     try:
-        image = Image.open(img_path).convert("RGB")
+        image = load_image(img_path)
     except Exception as exc:
         raise PipelineError(
             f"Gorsel acilamadi: {img_path}", "invalid_image") from exc
@@ -502,7 +511,8 @@ def translate_page_pipeline(
     # ---- 1) tespit + OCR ----
     emit_("ocr_started", 0.1, "Balon / metin bolgeleri tespit ediliyor")
     try:
-        detector = ComicTextDetector(conf=s.ocr_conf)
+        detector = ComicTextDetector(conf=s.ocr_conf,
+                                     text_free_min_conf=s.ocr_text_free_min_conf)
     except SystemExit as exc:
         raise PipelineError(
             "Bolge tespiti modeli kurulamadi veya indirilemedi. "
@@ -601,7 +611,7 @@ def translate_page_pipeline(
 
     # ---- 3) ceviri backendi secimi + ceviri ----
     backend_name = "mock"
-    warning: str | None = None
+    warnings: list[str] = []
     if provider == "mock":
         backend_name = "mock"
     elif chosen == "local":
@@ -610,14 +620,14 @@ def translate_page_pipeline(
         backend_name = provider
         if provider != "mock" and not _api_has_credentials(
                 provider, api_key, base_url, model):
-            warning = (
+            warnings.append(
                 "API saglayicisi icin kimlik bilgisi bulunamadi "
                 "(guvenli depo + .env bos); test mock cevirisi kullanilacak."
             )
             backend_name = "mock"
 
-    if warning:
-        emit_("warning", 0.8, warning,
+    if warnings:
+        emit_("warning", 0.8, warnings[-1],
               {"requested_provider": provider, "fallback": "mock"})
 
     emit_("translate_started", 0.8,
@@ -643,19 +653,36 @@ def translate_page_pipeline(
                 " modunu 'api' yapin.", "local_unavailable") from exc
         raise
 
-    # Mangada okuma sirasi: sutunlar sagdan sola, sutun ici ustten alta
+    # Mangada okuma sirasi: sutunlar sagdan sola, sutun ici ustten alta.
+    # Dekoratif adaylar (baslik/logo, bkz. ocr_prototype.decorative_flags)
+    # ceviriye GIRMEZ: editorde "devre disi" olarak gorunurler, kullanici
+    # isterse orada tekrar etkinlestirip cevirisini elle yazar.
     candidates = []
+    disabled_regions: list[dict] = []
     for i, r in enumerate(text_regions):
         text = (r.get("text") or "").strip()
+        if r.get("decorative"):
+            r2 = dict(r)
+            r2["index"] = i
+            r2["disabled_reason"] = r.get("decorative_reason") or "dekoratif aday"
+            disabled_regions.append(r2)
+            continue
         if not text or text == "(manual)":
             continue
         r2 = dict(r)
         r2["index"] = i
         candidates.append(r2)
     if not candidates:
-        raise PipelineError(
-            "OCR metni bulunamadi; cevirilecek icerik yok.",
-            "no_translatable_text")
+        # Tüm adaylar dekoratifse hata degil, bilgi: payload yine doner,
+        # bolgeler devre disi olarak gorunur. Gercek OCR boslugu ise hata.
+        if not disabled_regions:
+            raise PipelineError(
+                "OCR metni bulunamadi; cevirilecek icerik yok.",
+                "no_translatable_text")
+        warnings.append(
+            f"Tespit edilen {len(disabled_regions)} metin bolgesi dekoratif "
+            "olarak isaretlendi (baslik/logo adayi); ceviri yapilmadi. "
+            "Duzelme gerekiyorsa editorde bolgeleri etkinlestirin.")
     ordered = manga_reading_order(candidates)
     entries = [{"id": n - 1, "text": r["text"], "label_name": r["label_name"]}
                for n, r in enumerate(ordered, start=1)]
@@ -732,9 +759,24 @@ def translate_page_pipeline(
                 "style": typeset_info[e["id"]].get("style_used") or {},
             }
             for e, r in zip(entries, ordered)
+        ] + [
+            {
+                "id": len(entries) + di,
+                "index": r["index"],
+                "label_name": r["label_name"],
+                "bbox": list(r["bbox"]),
+                "original": r.get("text", ""),
+                "translation": "",
+                "font_size": None,
+                "lines": 0,
+                "overflow": False,
+                "disabled": True,
+                "decorative_reason": r.get("disabled_reason", "dekoratif aday"),
+            }
+            for di, r in enumerate(disabled_regions)
         ],
         "timings_ms": {k: round(v, 1) for k, v in timings.items()},
-        "warnings": [warning] if warning else [],
+        "warnings": warnings,
         "outputs": {
             "translated": str(translated_path),
             "cleaned": str(cleaned_path) if s.save_intermediate else None,
@@ -743,7 +785,9 @@ def translate_page_pipeline(
         },
     }
     emit_("done", 1.0,
-          f"Sayfa tamamlandi: {len(entries)} bolge cevrildi",
+          f"Sayfa tamamlandi: {len(entries)} bolge cevrildi"
+          + (f", {len(disabled_regions)} dekoratif bolge atlandi"
+             if disabled_regions else ""),
           {"backend": provider_used, "model": backend.model,
            "outputs": payload["outputs"]})
     return payload

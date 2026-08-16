@@ -341,6 +341,7 @@ pub fn run() {
             projects::list_projects,
             projects::create_project,
             projects::project_add_page,
+            projects::project_prepare_page,
             projects::save_project,
             projects::open_project,
             projects::delete_project

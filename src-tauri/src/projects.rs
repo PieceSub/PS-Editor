@@ -139,6 +139,17 @@ fn map_result_paths(result: &mut Value, f: &dyn Fn(&str) -> String) {
     }
 }
 
+/// Dosya uzantısını güvenli biçimde ayıklar (png/jpg/webp/bmp/gif...),
+/// bilinmeyen/geçersiz ise "png".
+fn image_ext(path: &str) -> String {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .filter(|e| !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or_else(|| "png".into())
+}
+
 fn copy_if_exists(src: &str, dst: &Path) -> Result<bool, String> {
     if src.is_empty() {
         return Ok(false);
@@ -146,6 +157,15 @@ fn copy_if_exists(src: &str, dst: &Path) -> Result<bool, String> {
     let s = Path::new(src);
     if !s.is_file() {
         return Ok(false);
+    }
+    // Kaynak ve hedef AYNI dosyaysa kopyalama gereksizdir (üstelik
+    // fs::copy aynı dosyaya yazarken içeriği bozabilir). Bu, girdinin
+    // zaten proje klasöründeki kopya olduğu "önce kopyala, sonra işle"
+    // akışında gerçekleşir (bkz. project_prepare_page).
+    if let (Ok(a), Ok(b)) = (fs::canonicalize(&s), fs::canonicalize(dst)) {
+        if a == b {
+            return Ok(true);
+        }
     }
     fs::copy(s, dst).map_err(|e| format!("{} kopyalanamadı: {e}", s.display()))?;
     Ok(true)
@@ -230,6 +250,38 @@ fn create_project_in(
     Ok(json!({ "id": id, "name": name, "created_at": now, "updated_at": now }))
 }
 
+/// Sayfayı işleme ÖNCESİNDE projeye hazırlar (adım 8, kaynak kirliliğini
+/// önler): kaynak görseli `pages/p{index}/original.<uzantı>` yoluna kopyalar
+/// ve pipeline'ın TÜM çıktılarını yazacağı `out_dir`'i döndürür.
+///
+/// Akış: "Yeni çeviri ekle" -> create_project -> project_prepare_page (her
+/// sayfa için) -> translate_page(image=proje kopyası, settings.out_dir=page
+/// dizini) -> project_add_page. Böylece orijinal kaynak klasöre HİÇBİR
+/// dosya yazılmaz; pipeline yalnızca proje içindeki kopya üzerinde çalışır.
+fn prepare_page_in(root: &Path, id: &str, index: usize, source: &str) -> Result<Value, String> {
+    let dir = root.join(id);
+    let page_dir = dir.join("pages").join(format!("p{index}"));
+    fs::create_dir_all(&page_dir)
+        .map_err(|e| format!("Sayfa klasörü oluşturulamadı: {e}"))?;
+
+    if source.trim().is_empty() {
+        return Err("Kaynak görsel yolu boş".into());
+    }
+    let src = Path::new(source);
+    if !src.is_file() {
+        return Err(format!("Kaynak görsel bulunamadı: {source}"));
+    }
+    let original_rel = format!("original.{}", image_ext(source));
+    let dst = page_dir.join(&original_rel);
+    if !copy_if_exists(source, &dst)? {
+        return Err(format!("Kaynak görsel kopyalanamadı (bulunamadı): {source}"));
+    }
+    Ok(json!({
+        "source": to_abs(&dir, &format!("pages/p{index}/{original_rel}")),
+        "out_dir": to_abs(&dir, &format!("pages/p{index}")),
+    }))
+}
+
 /// İşlenmiş bir sayfayı projeye ekler: görselleri proje klasörüne kopyalar,
 /// manifeste sayfa girişi ekler, ilk sayfadan `thumb.png` üretir ve sonucu
 /// MUTLAK yollarla (ön yüzün doğrudan kullanması için) döndürür.
@@ -253,22 +305,17 @@ fn add_page_in(root: &Path, id: &str, page: &Value) -> Result<Value, String> {
     if src.is_empty() {
         return Err("Sonuçta kaynak görsel yolu yok (result.image)".into());
     }
-    // Kaynağın uzantısını koru (png/jpg/webp/bmp/gif...), bilinmeyen -> png.
-    let ext = Path::new(&src)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-        .filter(|e| !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
-        .unwrap_or_else(|| "png".into());
-    let original_rel = format!("pages/p{index}/original.{ext}");
+    let original_rel = format!("pages/p{index}/original.{}", image_ext(&src));
     if !copy_if_exists(&src, &dir.join(&original_rel))? {
         return Err(format!("Kaynak görsel kopyalanamadı (bulunamadı): {src}"));
     }
 
     // Çıktı görsellerini de projeye kopyala: translated/cleaned/ocr_regions/
-    // before_after -> pages/p{n}/<anahtar>.png. Böylece manifestteki TÜM
-    // yollar proje içi olur (taşınabilirlik) ve düzenleme (re_render_region)
-    // proje içindeki translated.png'nin üzerine yazarak yerinde çalışır.
+    // before_after -> pages/p{n}/<anahtar>.<uzantı>. Böylece manifestteki
+    // TÜM yollar proje içi olur (taşınabilirlik) ve düzenleme
+    // (re_render_region) proje içindeki translated.png'nin üzerine yazarak
+    // yerinde çalışır. Uzantı kaynaktan korunur (ocr_regions bir JSON'dur;
+    // .png'ye sabitlemek dosyayı bozar).
     const OUTPUT_KEYS: [&str; 4] = ["translated", "cleaned", "ocr_regions", "before_after"];
     let mut copied_outputs: Vec<(&str, String)> = Vec::new();
     for key in OUTPUT_KEYS {
@@ -277,7 +324,13 @@ fn add_page_in(root: &Path, id: &str, page: &Value) -> Result<Value, String> {
         if path.is_empty() {
             continue;
         }
-        let dst_rel = format!("pages/p{index}/{key}.png");
+        let ext = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .filter(|e| !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+            .unwrap_or_else(|| "png".into());
+        let dst_rel = format!("pages/p{index}/{key}.{ext}");
         if copy_if_exists(path, &dir.join(&dst_rel))? {
             copied_outputs.push((key, dst_rel));
         }
@@ -404,6 +457,20 @@ pub fn project_add_page(
     add_page_in(&root, &project_id, &page)
 }
 
+/// Sayfayı işlemeden önce projeye hazırlar: kaynak kopyası + pipeline
+/// out_dir'i (kaynak klasöre asla yazma yapılmaması için).
+#[tauri::command]
+pub fn project_prepare_page(
+    app: AppHandle,
+    project_id: String,
+    index: usize,
+    source: String,
+) -> Result<Value, String> {
+    let root = projects_root(&app)?;
+    let _ = project_dir(&app, &project_id)?; // kimlik doğrulama
+    prepare_page_in(&root, &project_id, index, &source)
+}
+
 /// Autosave: manifesti diske yazar.
 #[tauri::command]
 pub fn save_project(app: AppHandle, project_id: String, manifest: Value) -> Result<Value, String> {
@@ -523,6 +590,92 @@ mod tests {
         assert_eq!(result["image"], json!(src.to_string_lossy().to_string()));
         assert_eq!(result["outputs"]["translated"], json!(translated.to_string_lossy().to_string()));
         fs::remove_dir_all(&project).unwrap();
+    }
+
+    /// Kaynak kirliliği senaryosu (adım 8 düzeltmesi): "önce kopyala, sonra
+    /// işle" akışı. Kaynak klasöre HİÇBİR şey yazılmamalı; pipeline çıktıları
+    /// (out_dir) proje sayfa klasöründe kalmalı; add_page aynı-dosya
+    /// kopyalarını no-op yapmalı.
+    #[test]
+    fn prepare_then_process_keeps_source_clean() {
+        let root = temp_project_dir();
+        let created = create_project_in(
+            &root, "Temiz Kaynak".into(), "folder".into(),
+            "auto".into(), "mock".into(), "tr".into(),
+        )
+        .unwrap();
+        let id = created["id"].as_str().unwrap().to_string();
+
+        // Sahte dış kaynak klasörü (dokunulmamalı).
+        let src_root = temp_project_dir();
+        let source = src_root.join("sayfa1.png");
+        fs::write(&source, b"saf-kaynak-baytlar").unwrap();
+        let before: Vec<String> = fs::read_dir(&src_root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+
+        // 1) Hazırlık: kaynak projeye kopyalanır, out_dir döner.
+        let prep = prepare_page_in(&root, &id, 0, &source.to_string_lossy()).unwrap();
+        let copied = prep["source"].as_str().unwrap().to_string();
+        let out_dir = prep["out_dir"].as_str().unwrap().to_string();
+        assert!(Path::new(&copied).is_file());
+        assert_eq!(fs::read(&copied).unwrap(), b"saf-kaynak-baytlar");
+
+        // 2) Pipeline, çıktılarını out_dir'e yazar (orijinal yolun yanına DEĞİL).
+        fs::write(Path::new(&out_dir).join("sayfa1_translated.png"), b"ceviri").unwrap();
+        fs::write(Path::new(&out_dir).join("sayfa1_ocr.json"), b"{}").unwrap();
+
+        // 3) add_page: kaynak zaten proje içinde (aynı dosya) -> bozulmadan
+        //    korunur; çıktılar kanonik adlara kopyalanır; ocr JSON .png'ye
+        //    sabitlenmez (manifestte uzantı korunur).
+        let result = json!({
+            "job_id": "j", "image": copied,
+            "outputs": {
+                "translated": format!("{out_dir}/sayfa1_translated.png"),
+                "ocr_regions": format!("{out_dir}/sayfa1_ocr.json"),
+                "cleaned": Value::Null, "before_after": Value::Null,
+            },
+            "regions": []
+        });
+        let _added = add_page_in(&root, &id, &json!({"name": "sayfa1.png", "result": result}))
+            .unwrap();
+        // Aynı dosya kopyası no-op oldu; üstüne yazılmadı.
+        assert_eq!(fs::read(&copied).unwrap(), b"saf-kaynak-baytlar");
+        // Manifest: kanonik adlar, uzantılar korunmuş, tüm yollar proje içi
+        // (ham project.json — göreli yollar).
+        let raw: Value = serde_json::from_str(
+            &fs::read_to_string(root.join(&id).join("project.json")).unwrap())
+            .unwrap();
+        let tr = raw["pages"][0]["result"]["outputs"]["translated"].as_str().unwrap();
+        assert!(tr.starts_with("pages/p0/translated."));
+        let abs_tr = to_abs(&root.join(&id), tr);
+        assert!(Path::new(&abs_tr).is_file());
+        assert_eq!(fs::read(&abs_tr).unwrap(), b"ceviri");
+        let ocr = raw["pages"][0]["result"]["outputs"]["ocr_regions"].as_str().unwrap();
+        assert!(ocr.ends_with("ocr_regions.json"), "OCR JSON uzantısı korunmalı: {ocr}");
+        let abs_ocr = to_abs(&root.join(&id), ocr);
+        assert!(Path::new(&abs_ocr).is_file());
+        assert_eq!(fs::read(&abs_ocr).unwrap(), b"{}");
+        assert!(raw["pages"][0]["result"]["image"]
+            .as_str()
+            .unwrap()
+            .starts_with("pages/p0/original."));
+
+        // 4) Kaynak klasör hiç değişmedi.
+        let after: Vec<String> = fs::read_dir(&src_root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(before, after, "kaynak klasör kirlenmemeli");
+        assert_eq!(fs::read(&source).unwrap(), b"saf-kaynak-baytlar");
+        assert!(prep["source"].as_str().unwrap().starts_with(
+            &root.join(&id).to_string_lossy().to_string()));
+
+        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&src_root).unwrap();
     }
 
     /// Uçtan uca akış: oluştur -> sayfa ekle -> düzenle/kaydet -> aç -> listele

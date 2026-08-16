@@ -162,24 +162,50 @@ def _rect_inter(a: tuple[int, int, int, int],
     return w * h
 
 
+def adaptive_ring_width(bw: int, bh: int, ring_frac: float = 0.10) -> int:
+    """Balon kutusuna gore olceklenir cizgi koruma bandi (px).
+
+    Balon cizgisi, detektor kutusunun icinde kutu boyutuyla degisen bir
+    mesafede durur (olcum: 700x1080 kapakta cizgi kutu kenarindan 4-14 px
+    iceride; kutunun kendisi cizginin disina da pay birakir). Sabit piksel
+    ring (or. 10 px) farkli olceklerde cizginin bir kismini koruyamaz ve
+    maske cizgiyi yiyerek 'kesik kesik' gorunum yaratir. Bu yuzden ring,
+    balonun kisa kenarina oranla hesaplanir:
+        ring = clamp(ceil(min_side * 0.10), 8, 32)
+    700x1080 kapak (min_side ~200)  -> 20 px  (olculen ihtiyac ~14+3)
+    1024 kare (min_side ~250)       -> 25 px
+    cok buyuk balonlar              -> 32 px ust sinir
+    kucuk balonlar                  -> 8 px alt sinir
+    """
+    if bw <= 0 or bh <= 0:
+        return 8
+    px = int(np.ceil(min(bw, bh) * ring_frac))
+    return max(8, min(32, px))
+
+
 def apply_bubble_guard(w: int, h: int, bubbles: list[dict],
                        margin_frac: float,
                        regions: list[dict],
                        dilate: int = 0,
-                       ring_width: int = 6,
+                       ring_width: int = 0,
                        inside_frac: float = 0.5) -> np.ndarray:
     """Balon cizgisini korurken metni tamamen maskeleyen bolge-bazli guard.
 
     Her balon kutusu kenarlarindan min(min_side * margin_frac, min_px)
     kadar iceride 'ic bolge' hesaplanir; ic bolgenin disinda kalan
-    'cizgi bandi' (ring_width px) balonun gorunen kenar cizgisini barindirir.
+    'cizgi bandi' balonun gorunen kenar cizgisini barindirir. Band
+    genisligi sabit degildir: ring_width > 0 verilirse o deger, verilmezse
+    her balon icin kutu boyutuna orantili olarak hesaplanir
+    (adaptive_ring_width). Band, ic bolgenin disinda KALIR (ic bolge
+    disindan degil iceriden sinirlandigi icin cakisma yok).
 
     Bolge bazli karar:
       - Metin bolgesi AGIRLIKLI olarak bir balonun icindeyse
         (kesisim / alan >= inside_frac): maskesi ic bolgeyle sinirlanir,
-        ancak orijinal bbox'i geri eklenir (glif kaybi olmaz). Margin
-        kucuk tutulursa (varsayilan %3) dilate + maske kenari gliflerin
-        icine tasmaz; LaMa maske kenarini temiz doldurur.
+        ardindan orijinal bbox'i geri eklenir (glif kaybi olmaz) — ANCAK
+        geri eklenen kisim cizgi bandindan (ring) arindirilir. Boylece
+        uzun/balona yakin metin kutularinin balon cizgisinin uzerine
+        tasan maskesi cizgiyi silmez (kesik gorunumun kok nedeni).
       - Balon sinirlarini asan serbest metin (SFX vb.): maskesi yalnizca
         balonlarin 'cizgi bandindan' arindirilir; balon icinde ve disinda
         tamamen maskelenebilir -> balon ustune binen SFX bile silinir.
@@ -193,14 +219,17 @@ def apply_bubble_guard(w: int, h: int, bubbles: list[dict],
     for b in bubbles:
         x1, y1, x2, y2 = b["bbox"]
         bw, bh = x2 - x1, y2 - y1
-        m = max(6, int(min(bw, bh) * margin_frac))
+        rw = adaptive_ring_width(bw, bh) if ring_width <= 0 else ring_width
+        # Ic bolge, cizgi bandinin IC kenarindan baslar: band cizgiyi
+        # barindirir, ic bolge asla bandin icine giremez.
+        m = max(rw, int(min(bw, bh) * margin_frac))
         gx1, gy1 = min(w - 1, max(0, x1 + m)), min(h - 1, max(0, y1 + m))
         gx2, gy2 = max(gx1, min(w - 1, x2 - m)), max(gy1, min(h - 1, y2 - m))
         inner_boxes.append((gx1, gy1, gx2, gy2))
         ring = np.zeros((h, w), dtype=np.uint8)
         cv2.rectangle(ring, (x1, y1), (x2, y2), 255, -1)
-        cv2.rectangle(ring, (x1 + ring_width, y1 + ring_width),
-                      (x2 - ring_width, y2 - ring_width), 0, -1)
+        cv2.rectangle(ring, (x1 + rw, y1 + rw),
+                      (x2 - rw, y2 - rw), 0, -1)
         rings.append(ring)
 
     out = np.zeros((h, w), dtype=np.uint8)
@@ -223,18 +252,31 @@ def apply_bubble_guard(w: int, h: int, bubbles: list[dict],
             rmask = dilate_mask(rmask, dilate)
 
         if best_i >= 0 and best_inter / rb_area >= inside_frac:
-            # Balon icindeki metin: ic bolge + orijinal bbox
+            # Balon icindeki metin: ic bolge + orijinal bbox. Geri eklenen
+            # bbox, balonun 'cizgi bandindan' (ring) arindirilir: uzun
+            # metin kutularinin balon cizgisinin uzerine tasmasi durumunda
+            # maske cizgiyi yemez (kesik/gorunmez cizgi hatasi).
             ib = inner_boxes[best_i]
             inner = np.zeros((h, w), dtype=np.uint8)
             cv2.rectangle(inner, (ib[0], ib[1]), (ib[2], ib[3]), 255, -1)
             rmask = cv2.bitwise_and(rmask, inner)
             cv2.rectangle(rmask, (rb[0], rb[1]), (rb[2], rb[3]), 255, -1)
+            rmask = cv2.bitwise_and(rmask, cv2.bitwise_not(rings[best_i]))
         else:
             # Serbest metin: yalnizca balon cizgi bandi korunur
             for ring in rings:
                 rmask = cv2.bitwise_and(rmask, cv2.bitwise_not(ring))
 
         out = cv2.bitwise_or(out, rmask)
+
+    # Hiyerarsik balonlar (kucuk balon buyuk balonun cizgi bandi icinde):
+    # bolge bazli kliplere guvenilmez — HICBIR balonun cizgi bandina maske
+    # tasamaz. (Ic-bolge kolu kendi balonunun ringiyle kliplenir, ama bir
+    # balonun icindeki metin komsu/buyuk balonun bandina ulasabilir.)
+    union_rings = np.zeros((h, w), dtype=np.uint8)
+    for ring in rings:
+        union_rings = cv2.bitwise_or(union_rings, ring)
+    out = cv2.bitwise_and(out, cv2.bitwise_not(union_rings))
     return out
 
 
@@ -490,10 +532,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--bubble-margin", type=float, default=0.08,
                    help="Balon kutusunun icerden kucultme orani (0-0.5); "
                         "balon cizgisini korur (Telea icin stabil maske saglar)")
-    p.add_argument("--ring-width", type=int, default=10,
-                   help="Serbest metin (SFX) icin korunacak balon cizgi bandi "
-                        "(px); detektor kutusu payi + cizgi kalinligini "
-                        "kapsamali (~10)")
+    p.add_argument("--ring-width", type=int, default=0,
+                   help="Korunacak balon cizgi bandi (px); 0 = balon kutu "
+                        "boyutuna gore adaptif (varsayilan, min_side*%%10, "
+                        "8-32 px). Cizgi kalinligi olcekle degisir, sabit "
+                        "piksel degerler farkli olceklerde kesik cizgiye "
+                        "yol acar")
     p.add_argument("--no-bubble-guard", action="store_true",
                    help="Balon kenar korumasini kapat (saf bbox+dilate)")
     p.add_argument("--feather", type=int, default=0,
@@ -580,8 +624,10 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_bubble_guard and bubbles:
         mask = apply_bubble_guard(w, h, bubbles, args.bubble_margin, regions,
                                   dilate=args.dilate, ring_width=args.ring_width)
+        ring_desc = (f"adaptif (balon boyutuna gore)"
+                     if args.ring_width <= 0 else f"{args.ring_width}px")
         info(f"Balon korumasi uygulandi (margin %{args.bubble_margin * 100:.0f}, "
-             f"ring {args.ring_width}px)")
+             f"ring {ring_desc})")
     else:
         mask = build_text_mask(w, h, regions)
         if args.dilate > 0:

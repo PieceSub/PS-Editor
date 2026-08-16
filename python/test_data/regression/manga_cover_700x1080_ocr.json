@@ -1,0 +1,102 @@
+{
+  "image": "test_data/regression/manga_cover_700x1080.png",
+  "regions": [
+    {
+      "label": 2,
+      "label_name": "text_free",
+      "score": 0.554178774356842,
+      "bbox": [
+        11,
+        27,
+        681,
+        182
+      ],
+      "decorative": true,
+      "decorative_reason": "tam genişlikte kısa bant (başlık/logo)",
+      "text": "ベルセルク"
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7719451785087585,
+      "bbox": [
+        132,
+        364,
+        272,
+        555
+      ],
+      "decorative": false,
+      "decorative_reason": "",
+      "text": "元気ですか？こんにちは！"
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.7686291933059692,
+      "bbox": [
+        447,
+        594,
+        584,
+        780
+      ],
+      "decorative": false,
+      "decorative_reason": "",
+      "text": "そんなことが「まさか．．．"
+    },
+    {
+      "label": 1,
+      "label_name": "text_bubble",
+      "score": 0.5678892135620117,
+      "bbox": [
+        561,
+        785,
+        649,
+        841
+      ],
+      "decorative": false,
+      "decorative_reason": "",
+      "text": "三浦"
+    }
+  ],
+  "bubbles": [
+    {
+      "label": 0,
+      "label_name": "bubble",
+      "score": 0.9500269889831543,
+      "bbox": [
+        380,
+        578,
+        652,
+        785
+      ],
+      "decorative": false,
+      "decorative_reason": ""
+    },
+    {
+      "label": 0,
+      "label_name": "bubble",
+      "score": 0.9440866708755493,
+      "bbox": [
+        61,
+        350,
+        341,
+        559
+      ],
+      "decorative": false,
+      "decorative_reason": ""
+    },
+    {
+      "label": 0,
+      "label_name": "bubble",
+      "score": 0.6765929460525513,
+      "bbox": [
+        550,
+        764,
+        658,
+        865
+      ],
+      "decorative": false,
+      "decorative_reason": ""
+    }
+  ]
+}

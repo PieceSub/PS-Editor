@@ -1,0 +1,92 @@
+{
+  "size": [
+    1600,
+    900
+  ],
+  "items": [
+    {
+      "name": "balon_1",
+      "label_name": "text_bubble",
+      "bbox": [
+        621,
+        101,
+        690,
+        231
+      ],
+      "decorative": false,
+      "required": true
+    },
+    {
+      "name": "balon_2",
+      "label_name": "text_bubble",
+      "bbox": [
+        905,
+        98,
+        980,
+        214
+      ],
+      "decorative": false,
+      "required": true
+    },
+    {
+      "name": "balon_3",
+      "label_name": "text_bubble",
+      "bbox": [
+        615,
+        386,
+        696,
+        514
+      ],
+      "decorative": false,
+      "required": true
+    },
+    {
+      "name": "balon_4",
+      "label_name": "text_bubble",
+      "bbox": [
+        906,
+        378,
+        979,
+        518
+      ],
+      "decorative": false,
+      "required": true
+    },
+    {
+      "name": "balon_5",
+      "label_name": "text_bubble",
+      "bbox": [
+        615,
+        661,
+        696,
+        789
+      ],
+      "decorative": false,
+      "required": true
+    },
+    {
+      "name": "anlatim_kutusu",
+      "label_name": "text_free",
+      "bbox": [
+        870,
+        704,
+        959,
+        746
+      ],
+      "decorative": false,
+      "required": false
+    },
+    {
+      "name": "sfx",
+      "label_name": "text_free",
+      "bbox": [
+        560,
+        718,
+        911,
+        898
+      ],
+      "decorative": false,
+      "required": false
+    }
+  ]
+}

@@ -45,6 +45,34 @@ MODEL_URL = f"https://huggingface.co/{MODEL_REPO}/resolve/main/{MODEL_FILE}"
 CLASS_NAMES = {0: "bubble", 1: "text_bubble", 2: "text_free"}
 CLASS_COLORS = {0: (66, 133, 244), 1: (15, 157, 88), 2: (245, 124, 0)}  # BGR değil, RGB
 
+# Dekoratif (çevrilmemesi gereken başlık/logo) sezgiseli.
+# Model sınıflandırması yalnızca "balon içi metin / serbest metin" ayrımı
+# yapar; kapak sayfalarında başlık bandı, logo, yazar mührü gibi öğeleri de
+# text_bubble/text_free olarak işaretler. Bu eşikler yalnızca BÜYÜK ölçekli
+# adayları işaretler:
+#   - alanı sayfanın %15'inden büyük bölge (kapak başlığı / tam sayfa yanlış
+#     pozitifi): tipik diyalog balonları sayfa alanının ~%3-8'idir.
+#   - sayfa genişliğinin %55'inden geniş VE yüksekliği %15'inden kısa bant
+#     (tam genişlik başlık şeridi).
+# Editörde "devre dışı" olarak gelirler; kullanıcı isterse elle açabilir
+# (yanlış pozitif güvenlik ağı).
+DECORATIVE_MIN_AREA_FRAC = 0.15
+DECORATIVE_BAND_MIN_W = 0.55
+DECORATIVE_BAND_MAX_H = 0.18
+
+# text_free (serbest metin / SFX / başlık) için ek güven eşiği.
+# Kapaklardaki dekoratif öğeler (logo, yayıncı yazısı, imza mührü) düşük
+# skorla tespit edilir; gerçek konuşma balonları text_bubble sınıfındadır.
+# Bu eşik YALNIZCA text_free sınıfına uygulanır: altında kalan adaylar
+# dekoratif ("varsayılan kapalı") işaretlenir ve otomatik typeset'e girmez.
+# Kalibrasyon (test_data/regression + gerçek kapak ölçümleri):
+#   dekoratif text_free öğeler   -> 0.41-0.79 (imza 0.41, başlık 0.48-0.55,
+#                                    gerçek kapak logoları 0.51-0.79)
+#   sentetik diyalog text_bubble -> 0.67-0.85 (eşiğe tabi değil)
+#   0.80; gözlenen en yüksek dekoratif skoru (0.79) kaplar, gerçek balonları
+#   etkilemez. Ortam değişkeni / ayar ile değiştirilebilir.
+TEXT_FREE_MIN_CONF = 0.8
+
 JP_FONT_CANDIDATES = [
     r"C:\Windows\Fonts\YuGothM.ttc",
     r"C:\Windows\Fonts\YuGothB.ttc",
@@ -136,6 +164,38 @@ def crop_region(image: Image.Image, bbox: tuple[int, int, int, int],
     return image.crop((x1, y1, x2, y2))
 
 
+def load_image(path: str | Path) -> Image.Image:
+    """Görseli RGB olarak açar; EXIF yönlendirmesini uygular.
+
+    Tarayıcı <img> etiketi EXIF Orientation'ı onurlar; ham piksel koordinatları
+    üzerinde çalışan detektör de aynı dönüşümü yapmalıdır — aksi halde
+    telefon/akıllı tarayıcıdan gelen gerçek görsellerde bbox'lar ekrandaki
+    görsele göre kayık görünür (döndürülmüş koordinat uzayı).
+    """
+    from PIL import ImageOps
+
+    image = Image.open(path).convert("RGB")
+    return ImageOps.exif_transpose(image)
+
+
+def decorative_flags(w: int, h: int, bbox: tuple[int, int, int, int]) -> tuple[bool, str]:
+    """Bölgenin 'muhtemelen dekoratif başlık/logo' olduğunu sezgisel ile bulur.
+
+    Model çıktısındaki yalnızca geometrik sinyalleri kullanır (sınıf ayrımı
+    zaten yok): sayfaya göre büyüklük ve aşırı geniş kısa bant. Döndürür:
+    (dekoratif mi?, gerekçe). Detaylar modül başındaki sabitlerde.
+    """
+    x1, y1, x2, y2 = bbox
+    area_frac = ((x2 - x1) * (y2 - y1)) / max(1, w * h)
+    wf = (x2 - x1) / max(1, w)
+    hf = (y2 - y1) / max(1, h)
+    if area_frac >= DECORATIVE_MIN_AREA_FRAC:
+        return True, f"bölge sayfanın %{100 * area_frac:.0f}'ini kaplıyor"
+    if wf >= DECORATIVE_BAND_MIN_W and hf <= DECORATIVE_BAND_MAX_H:
+        return True, "tam genişlikte kısa bant (başlık/logo)"
+    return False, ""
+
+
 # ---------------------------------------------------------------- tespit
 
 class ComicTextDetector:
@@ -147,10 +207,12 @@ class ComicTextDetector:
     Sınıflar: 0=bubble, 1=text_bubble, 2=text_free.
     """
 
-    def __init__(self, onnx_path: str | None = None, conf: float = 0.3):
+    def __init__(self, onnx_path: str | None = None, conf: float = 0.3,
+                 text_free_min_conf: float = TEXT_FREE_MIN_CONF):
         import onnxruntime as ort
 
         self.conf = conf
+        self.text_free_min_conf = text_free_min_conf
         self.onnx_path = onnx_path or self._resolve_model()
         so = ort.SessionOptions()
         so.log_severity_level = 3
@@ -208,11 +270,24 @@ class ComicTextDetector:
             y2 = min(h, y2)
             if x2 <= x1 or y2 <= y1:
                 continue
+            decorative, reason = decorative_flags(w, h, (x1, y1, x2, y2))
+            if (not decorative and int(lab) == 2
+                    and score < self.text_free_min_conf):
+                # text_free ve güven eşiğinin altında: dekoratif varsay —
+                # kapak logoları/yayıncı yazısı/imza gibi öğeler düşük
+                # skorla tespit edilir. Verinin sahibi kullanıcıdır:
+                # bölge editöre "varsayılan kapalı" gelir, kullanıcı
+                # isterse etkinleştirebilir.
+                decorative = True
+                reason = (f"güven skoru {score:.2f} < "
+                          f"{self.text_free_min_conf:.2f} (text_free eşiği)")
             results.append({
                 "label": int(lab),
                 "label_name": CLASS_NAMES.get(int(lab), f"unknown_{int(lab)}"),
                 "score": score,
                 "bbox": (x1, y1, x2, y2),
+                "decorative": decorative,
+                "decorative_reason": reason,
             })
         return results
 
@@ -246,7 +321,11 @@ def run_ocr(image: Image.Image, regions: list[dict], force_cpu: bool) -> None:
 
 def visualize(image: Image.Image, regions: list[dict], out_path: Path,
               debug: bool = False) -> None:
-    """Bölgeleri orijinal görsel üzerine çizer ve kaydeder."""
+    """Bölgeleri orijinal görsel üzerine çizer ve kaydeder.
+
+    Dekoratif olarak işaretlenen bölgeler (başlık/logo adayı) kesikli gri
+    çerçeveyle çizilir; normal bölgeler sınıf renginde düz çerçeve alır.
+    """
     vis = image.convert("RGB")
     draw = ImageDraw.Draw(vis)
     font = find_jp_font(20)
@@ -254,14 +333,18 @@ def visualize(image: Image.Image, regions: list[dict], out_path: Path,
     for i, region in enumerate(regions, start=1):
         x1, y1, x2, y2 = region["bbox"]
         color = CLASS_COLORS.get(region["label"], (128, 128, 128))
-        draw.rectangle((x1, y1, x2, y2), outline=color, width=3)
+        if region.get("decorative"):
+            draw_dashed_rect(draw, (x1, y1, x2, y2), color=(120, 120, 120), width=3)
+        else:
+            draw.rectangle((x1, y1, x2, y2), outline=color, width=3)
 
         badge = f"#{i}"
         if font:
             bb = draw.textbbox((0, 0), badge, font=font)
             bw, bh = bb[2] - bb[0], bb[3] - bb[1]
             bx, by = x1, max(0, y1 - bh - 6)
-            draw.rectangle((bx, by, bx + bw + 6, by + bh + 6), fill=color)
+            draw.rectangle((bx, by, bx + bw + 6, by + bh + 6),
+                           fill=(120, 120, 120) if region.get("decorative") else color)
             draw.text((bx + 3, by + 3), badge, font=font, fill="white")
 
         text = region.get("text")
@@ -272,6 +355,31 @@ def visualize(image: Image.Image, regions: list[dict], out_path: Path,
 
     vis.save(out_path)
     info(f"Görselleştirme kaydedildi: {out_path}")
+
+
+def draw_dashed_rect(draw: ImageDraw.ImageDraw,
+                     box: tuple[int, int, int, int],
+                     color, width: int = 3, dash: int = 10) -> None:
+    """PIL'de hazır desteği olmayan kesikli dikdörtgen çizer."""
+    x1, y1, x2, y2 = box
+    edges = [
+        ((x1, y1), (x2, y1)),
+        ((x2, y1), (x2, y2)),
+        ((x2, y2), (x1, y2)),
+        ((x1, y2), (x1, y1)),
+    ]
+    for (ax, ay), (bx, by) in edges:
+        horizontal = ay == by
+        length = abs(bx - ax) if horizontal else abs(by - ay)
+        step = max(1, 2 * dash)
+        t = 0
+        while t < length:
+            end = min(t + dash, length)
+            if horizontal:
+                draw.line((ax + t, ay, ax + end, ay), fill=color, width=width)
+            else:
+                draw.line((ax, ay + t, ax, ay + end), fill=color, width=width)
+            t += step
 
 
 # ---------------------------------------------------------------- CLI
@@ -286,6 +394,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Bölgeleri çizip ayrı dosyaya kaydet (varsayılan: <ad>_annotated.png)")
     p.add_argument("--conf", type=float, default=0.3,
                    help="Tespit güven eşiği (0-1)")
+    p.add_argument("--text-free-min-conf", type=float, default=TEXT_FREE_MIN_CONF,
+                   help="text_free sınıfı için ayrı eşik: altında kalan "
+                        "bölgeler dekoratif/varsayılan-kapalı işaretlenir "
+                        "(text_bubble'a uygulanmaz)")
     p.add_argument("--force-cpu", action="store_true",
                    help="GPU olsa bile OCR'ı CPU'da çalıştır")
     p.add_argument("--json", action="store_true",
@@ -317,11 +429,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.force_cpu:
         info("--force-cpu verildi; OCR CPU'da zorlanıyor.")
 
-    image = Image.open(image_path).convert("RGB")
+    image = load_image(image_path)
     info(f"Görsel: {image_path} ({image.width}x{image.height})")
 
     # ---- 1) Tespit ----
-    detector = ComicTextDetector(onnx_path=args.detector_model, conf=args.conf)
+    detector = ComicTextDetector(onnx_path=args.detector_model, conf=args.conf,
+                                 text_free_min_conf=args.text_free_min_conf)
     t0 = time.perf_counter()
     detections = detector.detect(image)
     t_detect = time.perf_counter() - t0
@@ -329,8 +442,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.debug:
         for i, det in enumerate(detections):
+            extra = ""
+            if det.get("decorative"):
+                extra = f"  [DEKORATIF: {det['decorative_reason']}]"
             info(f"  det[{i}] {det['label_name']} score={det['score']:.3f} "
-                 f"bbox={det['bbox']}")
+                 f"bbox={det['bbox']}{extra}")
 
     # ---- 2) Bölgeleri ayır: OCR yalnızca metin sınıflarında (1, 2) ----
     text_regions = [d for d in detections if d["label"] in (1, 2)]
@@ -341,8 +457,10 @@ def main(argv: list[str] | None = None) -> int:
         text_regions.sort(key=lambda d: (d["bbox"][1], d["bbox"][0]))
 
     bubbles = [d for d in detections if d["label"] == 0]
+    decor_count = sum(1 for d in text_regions if d.get("decorative"))
     info(f"Metin bölgesi (OCR adayı): {len(text_regions)}  "
-         f"(balon çerçevesi: {len(bubbles)})")
+         f"(balon çerçevesi: {len(bubbles)})"
+         + (f"  — {decor_count} dekoratif aday (başlık/logo)" if decor_count else ""))
 
     if not text_regions:
         print("Uyarı: metin bölgesi tespit edilemedi. "

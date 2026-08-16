@@ -660,12 +660,20 @@ async function run(): Promise<void> {
     setPageProgress(0, stageLabel("started"), pageName);
 
     try {
+      // 1a) Görseli ÖNCE proje klasörüne kopyala (kaynak klasöre asla
+      //     dokunulmaz): pipeline yalnızca proje içi kopya üzerinde çalışır.
+      const prepared = (await invoke("project_prepare_page", {
+        projectId,
+        index: i,
+        source: pages[i],
+      })) as { source: string; out_dir: string };
       const result = (await request("translate_page", {
-        image: pages[i],
+        image: prepared.source,
         target_lang: lang,
         mode: state.mode,
         provider,
         job_id: state.currentJob,
+        settings: { out_dir: prepared.out_dir },
       })) as PageResult;
       // 2) Sonucu projeye kopyala + manifeste yaz (incremental kayıt).
       const added = (await invoke("project_add_page", {
