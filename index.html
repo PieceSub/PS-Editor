@@ -25,10 +25,13 @@
         <button id="banner-close" class="icon-btn" title="Kapat" aria-label="Kapat">×</button>
       </div>
 
-      <nav class="tabs" role="tablist" aria-label="Ana görünümler">
-        <button id="tab-mangas" class="tab active" role="tab" aria-selected="true" type="button">Mangalar</button>
-        <button id="tab-editor" class="tab" role="tab" aria-selected="false" type="button">Editör</button>
-      </nav>
+      <div class="tabbar">
+        <nav class="tabs" role="tablist" aria-label="Ana görünümler">
+          <button id="tab-mangas" class="tab active" role="tab" aria-selected="true" type="button">Mangalar</button>
+          <button id="tab-editor" class="tab" role="tab" aria-selected="false" type="button">Editör</button>
+        </nav>
+        <button id="btn-new-project" class="btn tabs-add" type="button">+ Yeni çeviri ekle</button>
+      </div>
 
       <!-- ------------------------- Mangalar sekmesi ------------------------- -->
 
@@ -38,7 +41,6 @@
             <h2>Mangalar</h2>
             <p class="hint">Projeleriniz bu bilgisayarda saklanır. Bir projeye tıklayıp kaldığınız yerden devam edin.</p>
           </div>
-          <button id="btn-new-project" class="btn primary" type="button">+ Yeni çeviri ekle</button>
         </div>
         <div id="project-grid" class="project-grid"></div>
         <p id="projects-empty" class="hint projects-empty hidden">
