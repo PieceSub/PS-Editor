@@ -1193,6 +1193,53 @@ select:disabled {
   padding: 40px 0;
 }
 
+/* --- anime yer tutucu --- */
+
+.anime-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 90px 20px;
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  text-align: center;
+}
+
+.anime-empty .anime-icon {
+  width: 56px;
+  height: 56px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.anime-empty .empty-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.anime-empty .hint {
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+/* --- proje düzenleme görünümü geri navigasyonu --- */
+
+.editor-nav {
+  display: flex;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.editor-nav .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* --- editör boş durum --- */
 
 .editor-empty {

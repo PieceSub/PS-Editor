@@ -81,7 +81,7 @@ interface DonePage {
   imgVer: number;
 }
 
-type TabId = "mangas" | "editor";
+type TabId = "mangas" | "anime" | "editor";
 
 const state = {
   tab: "mangas" as TabId,
@@ -144,10 +144,12 @@ const els = {
   bannerText: $<HTMLSpanElement>("banner-text"),
   bannerClose: $<HTMLButtonElement>("banner-close"),
   tabMangas: $<HTMLButtonElement>("tab-mangas"),
-  tabEditor: $<HTMLButtonElement>("tab-editor"),
+  tabAnime: $<HTMLButtonElement>("tab-anime"),
   mangasView: $<HTMLElement>("mangas-view"),
+  animeView: $<HTMLElement>("anime-view"),
   editorView: $<HTMLElement>("editor-view"),
   editorEmpty: $<HTMLElement>("editor-empty"),
+  btnBackMangas: $<HTMLButtonElement>("btn-back-mangas"),
   projectGrid: $<HTMLDivElement>("project-grid"),
   projectsEmpty: $<HTMLElement>("projects-empty"),
   btnNewProject: $<HTMLButtonElement>("btn-new-project"),
@@ -244,14 +246,19 @@ function hideBanner(): void {
 
 function setTab(tab: TabId): void {
   state.tab = tab;
+  // "editor" gizli bir durumdur: sekme çubuğunda karşılığı yoktur, yalnızca
+  // programatik olarak (proje kartına tıklayarak) tetiklenir. Sekmelerden
+  // hiçbiri o zaman aktif görünmez.
   const onMangas = tab === "mangas";
+  const onAnime = tab === "anime";
   els.tabMangas.classList.toggle("active", onMangas);
-  els.tabEditor.classList.toggle("active", !onMangas);
+  els.tabAnime.classList.toggle("active", onAnime);
   els.tabMangas.setAttribute("aria-selected", String(onMangas));
-  els.tabEditor.setAttribute("aria-selected", String(!onMangas));
+  els.tabAnime.setAttribute("aria-selected", String(onAnime));
   els.mangasView.classList.toggle("hidden", !onMangas);
-  els.editorView.classList.toggle("hidden", onMangas);
-  if (!onMangas) {
+  els.animeView.classList.toggle("hidden", !onAnime);
+  els.editorView.classList.toggle("hidden", tab !== "editor");
+  if (tab === "editor") {
     // Bellekteki veri zaten güncel; yalnızca boş durumu senkronla.
     const hasPages = state.done.length > 0;
     els.editorEmpty.classList.toggle("hidden", hasPages);
@@ -1092,7 +1099,8 @@ async function initEvents(): Promise<void> {
   els.btnPickFolder.addEventListener("click", () => void pickFolder());
 
   els.tabMangas.addEventListener("click", () => setTab("mangas"));
-  els.tabEditor.addEventListener("click", () => setTab("editor"));
+  els.tabAnime.addEventListener("click", () => setTab("anime"));
+  els.btnBackMangas.addEventListener("click", () => setTab("mangas"));
   els.btnNewProject.addEventListener("click", openNewProjectModal);
   els.modalClose.addEventListener("click", closeNewProjectModal);
   els.modalBackdrop.addEventListener("click", closeNewProjectModal);

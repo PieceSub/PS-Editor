@@ -28,7 +28,7 @@
       <div class="tabbar">
         <nav class="tabs" role="tablist" aria-label="Ana görünümler">
           <button id="tab-mangas" class="tab active" role="tab" aria-selected="true" type="button">Mangalar</button>
-          <button id="tab-editor" class="tab" role="tab" aria-selected="false" type="button">Editör</button>
+          <button id="tab-anime" class="tab" role="tab" aria-selected="false" type="button">Anime</button>
         </nav>
         <button id="btn-new-project" class="btn tabs-add" type="button">+ Yeni çeviri ekle</button>
       </div>
@@ -48,9 +48,25 @@
         </p>
       </section>
 
-      <!-- ------------------------- Editör sekmesi ------------------------- -->
+      <!-- ------------------------- Anime sekmesi ------------------------- -->
+
+      <section id="anime-view" class="view hidden">
+        <div class="anime-empty">
+          <svg class="anime-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="2" y="4" width="20" height="16" rx="2" />
+            <path d="M2 9h20M7 4v5M12 4v5M17 4v5" />
+          </svg>
+          <p class="empty-title">Anime çeviri özelliği yakında geliyor</p>
+          <p class="hint">Anime çeviri sistemi şu anda mevcut değil. Bu bölüm geliştirme aşamasındadır — manga çevirilerine Mangalar sekmesinden devam edebilirsiniz.</p>
+        </div>
+      </section>
+
+      <!-- ------------------------- Proje düzenleme görünümü (gizli durum) ------------------------- -->
 
       <section id="editor-view" class="view hidden">
+        <div class="editor-nav">
+          <button id="btn-back-mangas" class="btn chip" type="button">← Mangalar'a dön</button>
+        </div>
         <div id="editor-empty" class="editor-empty hidden">
           <p class="empty-title">Henüz bir proje açılmadı.</p>
           <p class="hint">Mangalar sekmesinden bir proje seçin ya da "+ Yeni çeviri ekle" ile yeni bir çeviri başlatın.</p>
