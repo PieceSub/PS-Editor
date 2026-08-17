@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./styles.css";
 import { stageLabel, type ProgressPayload } from "./labels";
@@ -1061,6 +1062,12 @@ async function exportResults(): Promise<void> {
 
 /* -------------------------------------------------------------- olaylar */
 
+/** F11: mevcut tam ekran durumunu tersine çevirir (açtıysa kapatır). */
+async function toggleFullscreen(): Promise<void> {
+  const win = getCurrentWindow();
+  await win.setFullscreen(!(await win.isFullscreen()));
+}
+
 async function initEvents(): Promise<void> {
   await listen("python-event", (ev) => {
     const msg = ev.payload as Record<string, unknown> | undefined;
@@ -1124,6 +1131,15 @@ async function initEvents(): Promise<void> {
     } else if (!els.newProjectModal.classList.contains("hidden") && !state.running) {
       closeNewProjectModal();
     }
+  });
+
+  // F11: tam ekran aç/kapa. preventDefault WebView'in kendi tam ekran
+  // davranışını (ve tarayıcı varsayılanını) engeller, Tauri API'siyle
+  // çakışma olmaz. toggle: zaten tam ekrandaysa normal boyuta döner.
+  window.addEventListener("keydown", (ev) => {
+    if (ev.key !== "F11") return;
+    ev.preventDefault();
+    void toggleFullscreen();
   });
 
   for (const btn of els.modeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {

@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Ana pencere için varsayılan izinler","local":true,"windows":["main"],"permissions":["core:default","dialog:default"]}}
+{"default":{"identifier":"default","description":"Ana pencere için varsayılan izinler","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-set-fullscreen","dialog:default"]}}
