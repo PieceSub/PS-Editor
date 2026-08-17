@@ -103,6 +103,7 @@ const state = {
   selectedRegionId: null as number | null,
   projects: [] as ProjectSummary[],
   activeProject: null as { id: string; name: string } | null,
+  cardSize: 220,
   manifestMeta: null as ManifestMeta | null,
   savedAt: null as number | null,
   savedFlash: false,
@@ -258,6 +259,44 @@ function setTab(tab: TabId): void {
 }
 
 /* ------------------------------------------------------- proje listesi (Mangalar) */
+
+/** Kart grid zoom sınırları (px) ve adımı. Adım çarpımsaldır: her tekerlek
+ *  tıklığında %10 büyüme/küçülme; ani sıçrama olmaz. */
+const CARD_SIZE_MIN = 140;
+const CARD_SIZE_MAX = 420;
+const CARD_SIZE_STEP = 1.1;
+const CARD_SIZE_PREF_KEY = "mangas_card_size";
+
+const clampCardSize = (size: number): number =>
+  Math.min(CARD_SIZE_MAX, Math.max(CARD_SIZE_MIN, Math.round(size)));
+
+function setCardSize(size: number): void {
+  state.cardSize = clampCardSize(size);
+  els.projectGrid.style.setProperty("--card-size", `${state.cardSize}px`);
+}
+
+let cardPrefTimer: number | undefined;
+/** Zoom değişimini debounce'lu biçimde diske yazar (app_data_dir/prefs.json). */
+function scheduleCardPrefSave(): void {
+  window.clearTimeout(cardPrefTimer);
+  cardPrefTimer = window.setTimeout(() => {
+    invoke("save_pref", { key: CARD_SIZE_PREF_KEY, value: state.cardSize }).catch(() => {
+      /* tercih yazılamadı; oturum içinde çalışmaya devam */
+    });
+  }, 300);
+}
+
+/** Kayıtlı kart boyutunu yükler (yoksa varsayılan 220px). */
+async function loadCardSizePref(): Promise<void> {
+  try {
+    const v = (await invoke("load_pref", { key: CARD_SIZE_PREF_KEY })) as unknown;
+    if (typeof v === "number" && Number.isFinite(v)) {
+      setCardSize(v);
+    }
+  } catch {
+    /* tercih okunamadı; varsayılanla devam */
+  }
+}
 
 function renderSavedIndicator(): void {
   const base = "saved-indicator";
@@ -1051,6 +1090,25 @@ async function initEvents(): Promise<void> {
   els.modalClose.addEventListener("click", closeNewProjectModal);
   els.modalBackdrop.addEventListener("click", closeNewProjectModal);
 
+  // Kart grid zoom: Ctrl (veya Mac trackpad pinch için Cmd/Meta) + tekerlek.
+  // passive:false şart — yoksa preventDefault çalışmaz ve tarayıcının kendi
+  // sayfa zoom'u (Ctrl+scroll) devreye girip bizimkiyle çakışır.
+  els.projectGrid.addEventListener(
+    "wheel",
+    (ev) => {
+      if (!ev.ctrlKey && !ev.metaKey) return; // normal scroll'a dokunma
+      ev.preventDefault();
+      const delta = ev.deltaY || ev.deltaX;
+      if (delta === 0) return;
+      const next = state.cardSize * (delta < 0 ? CARD_SIZE_STEP : 1 / CARD_SIZE_STEP);
+      if (clampCardSize(next) !== state.cardSize) {
+        setCardSize(next);
+        scheduleCardPrefSave();
+      }
+    },
+    { passive: false },
+  );
+
   els.confirmOk.addEventListener("click", () => {
     const cb = confirmCallback;
     closeConfirm();
@@ -1118,6 +1176,8 @@ async function main(): Promise<void> {
   await loadProviders();
   setTab("mangas");
   renderSavedIndicator();
+  setCardSize(state.cardSize); // CSS varsayılanını JS durumuyla hizala
+  await loadCardSizePref();
   await refreshProjects();
 }
 

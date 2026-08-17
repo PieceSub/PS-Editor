@@ -53,8 +53,6 @@ a {
 }
 
 #app {
-  max-width: 1180px;
-  margin: 0 auto;
   padding: 22px 20px 48px;
 }
 
@@ -1061,8 +1059,16 @@ select:disabled {
 }
 
 .project-grid {
+  /* --card-size zoom (Ctrl+tekerlek) ile JS tarafından güncellenir (140–420px).
+     --card-max otomatik büyümenin üst sınırıdır: pencere genişledikçe kartlar
+     bu değeri aşmaz, böylece tam ekranda gerçek dışı boyutlara şişmez.
+     --card-track hem track min'i hem max'ı olur (zoom'a bağlı, kapaklı).
+     auto-fit: az kart varsa boş track'ler çöker, grid her genişlikte dolar. */
+  --card-size: 220px;
+  --card-max: 260px;
+  --card-track: min(var(--card-size), var(--card-max));
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(var(--card-track), var(--card-track)));
   gap: 16px;
 }
 
@@ -1178,6 +1184,15 @@ select:disabled {
   border: 1px dashed var(--border);
   border-radius: 14px;
   text-align: center;
+}
+
+/* Editör içeriği geniş pencerelerde okunabilir kalması için eski #app
+   sınırına (1180px) sabitlenir; Mangalar grid'i ise tam genişlik kullanır. */
+#results-card,
+.editor-empty {
+  max-width: 1180px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .editor-empty .empty-title {

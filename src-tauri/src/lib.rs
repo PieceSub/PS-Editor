@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -322,6 +322,50 @@ fn write_text_file(path: String, contents: String) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(|e| format!("Dosya yazılamadı: {e}"))
 }
 
+/* ------------------------------------------------------------- ön yüz tercihleri */
+
+/// Ön yüz tercihleri (ör. kart grid zoom seviyesi). Tek bir
+/// `prefs.json`'da `{key: value}` olarak app_data_dir altında saklanır;
+/// localStorage yerine Tauri komutları kullanılır (proje geneli karar).
+fn prefs_file(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Uygulama veri dizini alınamadı: {e}"))?;
+    Ok(dir.join("prefs.json"))
+}
+
+fn read_prefs(app: &AppHandle) -> Value {
+    prefs_file(app)
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_else(|| json!({}))
+}
+
+/// Tek bir tercih anahtarının değerini döndürür (yoksa Null).
+#[tauri::command]
+fn load_pref(app: AppHandle, key: String) -> Result<Value, String> {
+    Ok(read_prefs(&app).get(&key).cloned().unwrap_or(Value::Null))
+}
+
+/// Tercih anahtarını atomik yazar (.tmp + rename; projects.rs deseni).
+#[tauri::command]
+fn save_pref(app: AppHandle, key: String, value: Value) -> Result<(), String> {
+    let path = prefs_file(&app)?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("Tercih dizini oluşturulamadı: {e}"))?;
+    }
+    let mut prefs = read_prefs(&app);
+    prefs[key] = value;
+    let text = serde_json::to_string_pretty(&prefs)
+        .map_err(|e| format!("Tercihler serileştirilemedi: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &text).map_err(|e| format!("Tercihler yazılamadı: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("Tercihler güncellenemedi: {e}"))?;
+    Ok(())
+}
+
 /// Geliştirme modu ayrımı: `debug_assertions` etkinse (tauri dev / debug
 /// build) true döner. Sağ tık menüsü her derlemede kapalıdır; debug'da
 /// DevTools erişimi başlıktaki buton ve Ctrl+Shift+I ile sağlanır.
@@ -359,6 +403,8 @@ pub fn run() {
             list_images,
             copy_file,
             write_text_file,
+            load_pref,
+            save_pref,
             app_is_dev,
             open_devtools,
             projects::list_projects,
