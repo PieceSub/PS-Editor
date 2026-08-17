@@ -1,15 +1,35 @@
 # PS Editor
 
-**PieceSub** markası altında manga ve anime çevirisi için masaüstü uygulaması.
+**PieceSub** markası altında manga ve anime çevirisi için masaüstü uygulaması. Şu an
+**PRE-ALPHA** aşamasında; manga sayfası çevirisi uçtan uca çalışır (tespit → OCR →
+inpainting → LLM çeviri → typesetting), anime tarafı için yalnızca yer tutucu sekme vardır.
 
-Mimari: **Tauri 2** (Rust + WebView) kabuk + **Python sidecar** (ileride FastAPI;
-OCR / çeviri / inpainting gibi ağır ML işlerini bu servis yapacak).
+Mimari: **Tauri 2** (Rust + WebView) kabuk + **Python sidecar** (OCR / inpainting /
+çeviri gibi ağır işler bu serviste çalışır).
 
 Öncelik sırası: Windows > Linux > macOS > Android (son).
 
 ---
 
-## Kurallar / Bağımlılıklar
+## Özellikler
+
+- Tek sayfa veya klasör halinde toplu manga sayfası çevirisi
+- Otomatik balon/metin tespiti (RT-DETR-v2, ONNX/CPU) + manga-ocr
+- LaMa / OpenCV ile metin temizleme (balon kenarı korumalı)
+- Çeviri sağlayıcıları: yerel Ollama, OpenAI, OpenAI uyumlu (Groq / Together /
+  DeepSeek vb.), Anthropic Claude ve API anahtarı gerektirmeyen mock (test)
+- **Otomatik mod** (auto): VRAM'e göre yerel model ile API arasında otomatik seçim
+- Manga okuma sırasına göre sayfa diyaloğunu tek LLM isteğiyle çevirme
+- Scanlation stili typesetting: otomatik font boyutu, satır kaydırma, beyaz kontur
+- Görsel düzenleyici: bölge taşıma/yeniden boyutlandırma, metin düzenleme, devre dışı
+  bırakma, silme, elle yeni bölge ekleme — tümü **autosave** ile projeye yazılır
+- Kalıcı proje sistemi: proje kartları, küçük resim önizleme, yeniden açma, silme
+- F11 tam ekran, proje kartı zoom (Ctrl + tekerlek)
+- API anahtarları işletim sistemi güvenli deposunda (keyring) saklanır
+
+---
+
+## Gereksinimler
 
 | Bağımlılık | Gerekçe | Windows kurulumu |
 |---|---|---|
@@ -19,17 +39,21 @@ OCR / çeviri / inpainting gibi ağır ML işlerini bu servis yapacak).
 | Python 3.11+ | Sidecar | `winget install Python.Python.3.11` |
 | WebView2 Runtime | WebView (Win11'de hazır) | [Microsoft indirme](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) |
 
-Not: MSI paketi üretmek istiyorsanız Windows "VBSCRIPT" isteğe bağlı özelliğinin açık olması gerekir (`failed to run light.exe` hatası görürseniz kontrol edin).
+Notlar:
 
-PowerShell Notu: npm betikleri `npm.ps1` yerine `npm.cmd` ile çağrılır; `npm` PowerShell'de
-çalışmazsa `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` uygulayın ya da `npm.cmd` kullanın.
+- MSI paketi üretmek istiyorsanız Windows "VBSCRIPT" isteğe bağlı özelliği açık olmalı
+  (`failed to run light.exe` hatası görürseniz kontrol edin).
+- PowerShell'de npm betikleri `npm.ps1` yerine `npm.cmd` ile çağrılır; `npm`
+  çalışmazsa `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` uygulayın ya da
+  `npm.cmd` kullanın. `npm run setup:python` / `npm run sidecar:build` komutları
+  platforma göre `.ps1` / `.sh` betiklerini `run-platform.mjs` üzerinden otomatik seçer.
 
 ---
 
-## Hızlı Başlangıç (yeni ortam)
+## Hızlı Başlangıç
 
 ```powershell
-# 1) Python sanal ortamı (python/.venv)
+# 1) Python sanal ortamı + bağımlılıklar (python/.venv)
 npm run setup:python
 
 # 2) Frontend bağımlılıkları
@@ -42,20 +66,20 @@ npm run sidecar:build
 npm run tauri dev
 ```
 
-> **2. adımdan sonraki `npm run` komutları `npm.cmd run` gerektirebilir.**
+> **2. adımdan sonraki `npm run` komutları Windows'ta `npm.cmd run` gerektirebilir.**
 
 ### Python tarafında hızlı iterasyon (PyInstaller'sız)
 
-Sidecar üretim binary'si ile çalışıyor olsa bile Python kodunu `python/sidecar.py` içinde
-değiştirip derlemeden denemek isterseniz:
+Sidecar üretim binary'si ile çalışıyor olsa bile Python kodunu derlemeden denemek
+isterseniz:
 
 ```powershell
 $env:PS_EDITOR_PY_SOURCE = "venv"   # Rust tarafı venv Python'u kullanır
 npm.cmd run tauri dev
 ```
 
-Bunun çalışabilmesi için `src-tauri/binaries/` içinde sidecar bulunmalıdır (tauri-build derleme
-aşamasında `resources` altındaki `binaries/python-sidecar/` dizininin varlığını zorunlu tutar).
+Bunun çalışabilmesi için `src-tauri/binaries/` içinde sidecar bulunmalıdır
+(tauri-build derleme aşamasında varlığını zorunlu tutar).
 
 ---
 
@@ -63,14 +87,13 @@ aşamasında `resources` altındaki `binaries/python-sidecar/` dizininin varlı�
 
 **Seçim: stdin/stdout üzerinden JSON Lines (NDJSON).** Neden HTTP port değil:
 
-1. Doğrudan pipe yönetimi (`std::process::Command` + okuma iş parçacığı) ekstra bağımlılık
-   gerektirmez; sidecar **onedir** paketlendiği için çalıştırma yolu da tamamen bizim
-   kontrolümüzdedir (resource dizini).
+1. Doğrudan pipe yönetimi ekstra bağımlılık gerektirmez; sidecar **onedir**
+   paketlendiği için çalıştırma yolu tamamen bizim kontrolümüzdedir.
 2. Dev (venv python) ve prod (PyInstaller onedir) modlarında **aynı kod yolu** kullanılır.
-3. Hayat döngüsü (başlat/kapat) Tauri'ye aittir; süreç kapanınca Tauri bunu fark eder.
+3. Yaşam döngüsü (başlat/kapat) Tauri'ye aittir; süreç kapanınca Tauri bunu fark eder.
 
-İleride FastAPI eklendiğinde: stdin/stdout **kontrol kanalı** (start/stop/health/ping) olarak
-kalır, büyük veri (OCR/çeviri) HTTP üzerinden akar — topluluğun yerleşik deseni budur.
+İleride FastAPI eklendiğinde: stdin/stdout **kontrol kanalı** (start/stop/health/ping)
+olarak kalır, büyük veri (OCR/çeviri) HTTP üzerinden akar.
 
 ### Protokol
 
@@ -81,25 +104,92 @@ Hata:                             {"id": 1, "ok": false, "error": "..."}
 Olay (push):                      {"event": "ready", "payload": {...}}
 ```
 
-- Her satır tek bir JSON nesnesidir (UTF-8).
+- Her satır tek bir JSON nesnesidir (UTF-8; üç akış da UTF-8'e sabitlenmiştir).
 - `id` istekleri eşleştirir; Rust tarafı yanıtı bekleyen `invoke` çağrısına yönlendirir.
-- Olaylar ön yüze `python-event` adıyla yayınlanır.
-- Mevcut komutlar: `ping`, `hello`, `check_cuda` (ve kapanışta `shutdown`).
+- Olaylar ön yüze `python-event` adıyla yayınlanır (`translate_page_progress` vb.).
 
-### Sidecar yapılandırması
+Mevcut komutlar:
 
-- **PyInstaller modu: onedir** (onefile değil). onefile her başlatılışta ~4.7 GB'ı geçici
-  dizine (/tmp, %TEMP%) ayıklar; force-kill/çökme sonrası bu `_MEI*` dizinleri temizlenmeden
-  birikip alanı doldurur. onedir hiç ayıklama yapmaz; sidecar `src-tauri/binaries/python-sidecar/`
-  klasöründe derlenir (exe + `_internal/`).
+| Komut | Açıklama |
+|---|---|
+| `hello`, `ping` | Sağlık kontrolü |
+| `check_cuda`, `vram_report` | GPU durumu / VRAM raporu |
+| `translate_page` | Tek sayfa uçtan uca pipeline |
+| `re_render_region` | Tek bölgeyi yeniden typeset etme (düzenleyici) |
+| `set_api_key` / `delete_api_key` | Güvenli depoya anahtar yaz / sil |
+| `list_providers` | Kullanılabilir çeviri sağlayıcıları |
+| `shutdown` | Kapanış |
+
+### Pipeline akışı (`translate_page`)
+
+```
+tespit (RT-DETR-v2, ONNX/CPU) -> manga-ocr (GPU)
+  -> inpainting (LaMa; OpenCV alternatifi)  -> çeviri (LLM) -> typesetting
+```
+
+- Ağır bağımlılıklar (torch/cv2/PIL) **yalnızca komut işleme sırasında** (geç import)
+  yüklenir; `ping` gibi hafif komutlar anında yanıt verir.
+- Çeviri modu kararı (`auto`/`local`/`api`) `pipeline.py` → `resolve_translation_mode`
+  içindedir: VRAM ölçümü `torch.cuda.mem_get_info` (öncelikli) / `nvidia-smi` (yedek).
+  Eşikler ve rezervler `.env` veya komut payload'ındaki `settings_override` ile
+  değiştirilebilir.
+- Kullanıcı hatası mesajları stack-trace'siz taşınır (`PipelineError`).
+
+### Çeviri sağlayıcıları
+
+`translate_typeset_prototype.py` içinde soyutlanmıştır (`TranslationBackend` +
+`create_backend` fabrikası). Yeni sağlayıcı: sınıf yazıp `create_backend`'e bağlamak
+yeterli.
+
+| Sağlayıcı | Açıklama |
+|---|---|
+| `mock` | API anahtarı gerektirmez; deterministik sahte çeviri (test) |
+| `local` | Yerel Ollama (`http://localhost:11434/v1`) |
+| `openai` | OpenAI resmi uç noktası |
+| `openai_compat` | OpenAI uyumlu herhangi bir uç nokta (Groq, Together, DeepSeek, LM Studio, vLLM…) |
+| `anthropic` | Claude Messages API (OpenAI uyumlu değildir; ayrı sınıf) |
+
+Anahtar / base_url / model `resolve_credentials` ile çözülür; kaynak önceliği:
+CLI/payload argümanları → işletim sistemi güvenli anahtar deposu (keyring:
+Windows Credential Manager / macOS Keychain / Linux Secret Service) → `.env`
+(geliştirme fallback'i) → kod varsayılanları. Anahtarlar asla stdout/log'a yazılmaz.
+
+### Sidecar paketleme
+
+- **PyInstaller modu: onedir** (onefile değil). onefile her başlatılışta ~4.7 GB'ı
+  geçici dizine (/tmp, %TEMP%) ayıklar; force-kill/çökme sonrası `_MEI*` dizinleri
+  birikip alanı doldurur. onedir hiç ayıklama yapmaz.
 - `src-tauri/tauri.conf.json` → `bundle.resources: {"binaries/python-sidecar/": "sidecar/"}`
-  (derleme öncesi `npm run sidecar:build` gerekir; tauri-build varlığını zorunlu tutar).
-- Rust: `$RESOURCE/sidecar/python-sidecar` yolundan `std::process::Command` ile başlatılır;
-  fallback olarak `PS_EDITOR_PY_SOURCE=venv` ile `python/.venv/Scripts/python.exe python/sidecar.py`.
-- Savunma: `sidecar.py` main() başında geçici dizindeki öksüz `_MEI*` kalıntılarını temizler
-  (kendi dizinini, canlı süreçlerin dizinlerini, genç dizinleri ve symlink'leri asla silmez;
-  `PS_EDITOR_MEI_MAX_AGE_SECONDS` eşiği geçersiz kılar). Böylece eski onefile kalıntıları
-  sonraki başlatılışta otomatik temizlenir.
+- Rust: `$RESOURCE/sidecar/python-sidecar` yolundan başlatılır; fallback olarak
+  `PS_EDITOR_PY_SOURCE=venv` ile `python/.venv` Python'u kullanılır.
+- Savunma: `sidecar.py` başlangıçta geçici dizindeki öksüz `_MEI*` kalıntılarını
+  temizler (kendi dizinini, canlı süreçlerin dizinlerini asla silmez;
+  `PS_EDITOR_MEI_MAX_AGE_SECONDS` eşiği geçersiz kılar).
+
+---
+
+## Proje Sistemi
+
+Her proje kendi klasöründe yaşar (`app_data_dir/Projects/{project_id}/`):
+
+```
+{project_id}/
+├── project.json     # manifest: meta + pages[] (Region dahil, yalnızca göreli yollar)
+├── thumb.png        # liste önizlemesi (ilk sayfanın çevrilmiş görseli)
+└── pages/
+    ├── p0/          # original.*, translated.png, cleaned.png, ...
+    └── p1/
+```
+
+Mimari kararlar:
+
+1. **Binary'ler manifest'ten ayrı, göreli yolla referanslanır** (CapCut/Premiere
+   proje deseni): büyük görseller JSON'a gömülmez; manifest küçük kalır, proje
+   klasörü taşınabilir olur, `re_render_region` görseli yerinde güncelleyebilir.
+2. **Atomik yazma**: önce `project.json.tmp`, sonra rename — kesintiye uğrarsa eski
+   manifest sağlam kalır.
+3. **Autosave**: ayrı "Kaydet" butonu yoktur; net eylem anlarında (Uygula / Devre Dışı
+   Bırak / Sil / yeni bölge) ve her sayfa işlenince manifest diske yazılır.
 
 ---
 
@@ -111,20 +201,29 @@ PS-Editor/
 ├── vite.config.ts            # 1420 portu, src-tauri/python izleme dışı
 ├── tsconfig.json
 ├── index.html
-├── app-icon.png              # ikon kaynağı (tauri icon ile yeniden üretilir)
+├── app-icon.png              # ikon kaynağı
+├── LICENSE                   # MIT
 ├── src/                      # Ön yüz (vanilla TypeScript)
-│   ├── main.ts               # invoke köprüleri + python-event dinleyicisi
+│   ├── main.ts               # invoke köprüleri, python-event dinleyicisi, proje akışı
+│   ├── editor.ts             # bölge düzenleyici (taşı, boyutlandır, metin)
+│   ├── viewer.ts             # sonuç görüntüleyici (karşılaştır/ön/arka modları)
+│   ├── labels.ts             # aşama etiketleri
 │   └── styles.css
 ├── python/
-│   ├── sidecar.py            # JSON Lines sidecar (sadece stdlib)
-│   ├── ocr_prototype.py      # adım 2: tespit + OCR (balon/metin bbox'ları, --json)
+│   ├── sidecar.py            # JSON Lines sidecar (komutlar + _MEI* temizliği)
+│   ├── pipeline.py           # uçtan uca pipeline orkestrasyonu (adım 5)
+│   ├── ocr_prototype.py      # adım 2: tespit + OCR
 │   ├── inpaint_prototype.py  # adım 3: OpenCV vs LaMa metin temizleme
+│   ├── translate_typeset_prototype.py  # adım 4: çeviri backends + typesetting
 │   ├── make_test_manga.py    # test sayfası üretici
-│   ├── test_data/            # test sayfası + çıktılar (mask, karşılaştırma, JSON)
-│   └── requirements.txt      # OCR + inpainting bağımlılıkları
+│   ├── analyze_ink_remnant.py, verify_bubble_guard.py, test_detect_regression.py, ...
+│   ├── fonts/                # typesetting yazı tipleri (Comic Neue)
+│   ├── test_data/            # test sayfası + çıktılar (regression/ dahil)
+│   └── requirements.txt
 ├── scripts/
-│   ├── setup-python.ps1      # venv oluştur
-│   └── build-sidecar.ps1     # PyInstaller onedir -> src-tauri/binaries/python-sidecar/
+│   ├── run-platform.mjs      # platforma göre .ps1/.sh seçici
+│   ├── setup-python.{ps1,sh} # venv oluştur + bağımlılıklar
+│   └── build-sidecar.{ps1,sh}# PyInstaller onedir -> src-tauri/binaries/python-sidecar/
 └── src-tauri/
     ├── tauri.conf.json       # resources (sidecar klasörü), pencere, kimlik
     ├── Cargo.toml
@@ -133,72 +232,53 @@ PS-Editor/
     ├── binaries/             # sidecar klasörü (gitignore'da; her platformda ayrı derlenir)
     └── src/
         ├── main.rs
-        └── lib.rs            # sidecar süpervizörü: spawn, stdin/stdout, istek eşleştirme
+        ├── lib.rs            # sidecar süpervizörü + Tauri komutları
+        └── projects.rs       # proje depolama (manifest, atomik yazma, autosave)
 ```
 
 ---
 
-## OCR ve Inpainting Prototipleri (adım 2-3)
+## Prototipler (OCR / Inpainting / Typesetting)
 
-Şu an tamamlanan iki prototip `python/` altında; ikisi de sidecar'a taşınmadan önce
-algoritma/mimari kararlarını netleştirmek için yazıldı.
+Prototipler `python/` altındadır; sidecar'a taşınmadan önce algoritma/mimari
+kararlarını netleştirmek için yazıldı. İlk çalıştırmada modeller otomatik iner:
 
-### Kurulum (mevcut venv'e ek)
-
-```powershell
-cd python
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-İlk çalıştırmada modeller otomatik iner:
 - Tespit: `detector-v4-s_int8.onnx` (~11 MB, Hugging Face)
 - OCR: `manga-ocr` (~100 MB, Hugging Face)
 - LaMa inpainting: `big-lama.pt` (~206 MB, GitHub release) — yerel kopya için
   `LAMA_MODEL` ortam değişkeni veya `--lama-model` ile yol verin.
 
-### Adım 2 — OCR (`ocr_prototype.py`)
-
-Balon/metin tespiti (RT-DETR-v2, ONNX/CPU) + manga-ocr (GPU). Döndürülmüş SFX gibi
-kaçan bölgeler `--add-bbox` ile elle eklenir.
-
 ```powershell
+# OCR (test sayfası, python/ altında)
 .\.venv\Scripts\python.exe ocr_prototype.py test_data\manga_test.png --json
-```
 
-### Adım 3 — Inpainting (`inpaint_prototype.py`)
-
-OCR JSON'undaki bbox'lardan metin maskesi üretir, balon kenarı koruması (bubble
-guard) uygular ve iki yöntemle temizler:
-
-```powershell
+# Inpainting
 .\.venv\Scripts\python.exe inpaint_prototype.py test_data\manga_test.png `
   --regions test_data\manga_ocr.json --method both --add-bbox 100,903,540,1127 --json
+
+# Çeviri + typesetting
+.\.venv\Scripts\python.exe translate_typeset_prototype.py test_data\manga_test.png `
+  --regions ocr.json --cleaned test_data\manga_test_inpaint_lama.png
 ```
 
-Çıktılar: `manga_test_mask.png`, `manga_test_inpaint_{opencv,lama}.png`,
-`manga_test_compare.png` (yan yana), `manga_test_regions_compare.png` (bölge zoom'ları).
-
-**Doğrulama senaryosu (test sayfası, 800x1130):**
+### Doğrulama senaryosu (test sayfası, 800x1130)
 
 | Metrik | Beklenen | Gözlenen |
 |---|---|---|
-| Balon kenarı koyu piksel (6 balon) | değişmemeli | %100 korundu (618/595/514/551/1467/1514 → aynı) |
+| Balon kenarı koyu piksel (6 balon) | değişmemeli | %100 korundu |
 | Metin bölgesi mürekkep oranı (LaMa) | → ~0 | 0.000-0.001 |
 | Metin bölgesi mürekkep oranı (OpenCV) | → ~0 | 0.000-0.006 |
 | SFX glifleri | silinmeli | 6998 → 1611 (kalan: koruma bandı + kuyruk, bilinçli) |
 | Süre (GPU, RTX 4060) | — | OpenCV 0.26s; LaMa 0.7s yükleme + 1.1s inference |
 
-**Varsayılan yöntem: LaMa.** Doku (screen tone) ve çizgiye dokunmadan metni
-söker; OpenCV (Telea) büyük deliklerde gri leke bırakıp maske şekline duyarlıdır —
-yalnızca hızlı önizleme için uygun. Maske stratejisi: bbox birleşimi + 4px dilate,
-balon-içi bölgeler iç kutuya kırpılır, balon üstüne binen SFX'te balonun 10px'lik
-çizgi bandı korunur, son bir geçiş maskede kalan koyu kalıntıları (bağlı bileşen,
-≥20px) maskenin dışına taşmadan temizler.
+**Varsayılan yöntem: LaMa.** Doku (screen tone) ve çizgiye dokunmadan metni söker;
+OpenCV (Telea) yalnızca hızlı önizleme için uygundur. Balon kenarı koruması (bubble
+guard), bbox birleşimi + 4px dilate maske stratejisi ve kalıntı temizleme pası
+uygulanır; davranış regresyon testleriyle doğrulanır.
 
-**Bilinen sınırlamalar:** yoğun screen tone üzerinde OpenCV leke bırakabilir;
-balon sınırına bitişik taşan metin (maske kenarı glife değerse) birkaç px kalıntı
-bırakabilir; döndürülmüş SFX'te balon kuyruğu çizgisi bilinçli olarak korunur;
-balon tespiti kaçarsa manuel bbox gerekir.
+**Bilinen sınırlamalar:** yoğun screen tone üzerinde OpenCV leke bırakabilir; balon
+sınırına bitişik taşan metin birkaç px kalıntı bırakabilir; döndürülmüş SFX'te balon
+kuyruğu çizgisi bilinçli olarak korunur; balon tespiti kaçarsa manuel bbox gerekir.
 
 ---
 
@@ -206,20 +286,27 @@ balon tespiti kaçarsa manuel bbox gerekir.
 
 | Belirti | Çözüm |
 |---|---|
-| `resource path binaries\python-sidecar doesn't exist` | `npm.cmd run sidecar:build` (tauri-build derlemede sidecar klasörünü ister) |
-| Eski Python kodu çalışıyor (prod) | `npm.cmd run sidecar:build` ile yeniden derleyin + `src-tauri/target/release/sidecar` klasörünü silip yeniden derleyin (tauri-build resource önbelleğini güncellemez — [tauri#15134](https://github.com/tauri-apps/tauri/issues/15134)) |
+| `resource path binaries\python-sidecar doesn't exist` | `npm run sidecar:build` (tauri-build derlemede sidecar klasörünü ister) |
+| Eski Python kodu çalışıyor (prod) | `npm run sidecar:build` ile yeniden derleyin + `src-tauri/target/release/sidecar` klasörünü silip yeniden derleyin (tauri-build resource önbelleğini güncellemez — [tauri#15134](https://github.com/tauri-apps/tauri/issues/15134)) |
 | `npm` PowerShell'de "scripts disabled" | `npm.cmd` kullanın veya `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | MSI hatası `failed to run light.exe` | Windows "VBSCRIPT" özelliğini açın |
 | Pencere açılıp anında kapanıyor | WebView2 Runtime eksik — kurun |
-| Orphan python-sidecar süreci | Uygulamayı force-kill etmeyin; pencereyi normal kapatın (Exit handler'ı öldürür) |
-| /tmp (veya %TEMP%) `_MEI*` kalıntılarıyla doldu | Sidecar'ı son kez başlatın: `sidecar.py` başlangıçta öksüz kalıntıları otomatik temizler (onedir moduna geçildiği için artık yeni kalıntı oluşmaz) |
+| Orphan python-sidecar süreci | Uygulamayı force-kill etmeyin; pencereyi normal kapatın |
+| /tmp (veya %TEMP%) `_MEI*` kalıntılarıyla dolu | Sidecar'ı son kez başlatın — başlangıçta öksüz kalıntıları otomatik temizler (onedir moduna geçildiği için artık yeni kalıntı oluşmaz) |
 
 ---
 
-## Yol Haritası (sonraki adımlar)
+## Yol Haritası
 
 1. FastAPI katmanı: `sidecar.py` içine uvicorn + FastAPI; stdin/stdout kontrol kanalı + HTTP veri kanalı.
-2. Prototip modüllerini (OCR + inpainting) sidecar komutlarına taşıma; çıktı formatı prototip JSON'larına dayanır.
-3. Çeviri modülü ve Tauri komutları.
-4. Linux/macOS build kurulumları; `sidecar:build` scriptine platform üçlüleri.
-5. Android (en son).
+2. Prototip modüllerinin sidecar komutlarına taşınması (büyük ölçüde tamam; `translate_page` / `re_render_region` aktif).
+3. Çeviri kalitesi: context bellek, per-sayfa stilleri, şablon desteği.
+4. Anime tarafı: alt yazı + sahne metni tespiti/çevirisi (yer tutucu sekme hazır).
+5. Linux/macOS build kurulumları ve platform üçlüleri (`sidecar:build`).
+6. Android (en son).
+
+---
+
+## Lisans
+
+MIT — telif hakkı (c) 2026 PieceSub. Ayrıntılar için [LICENSE](LICENSE).
