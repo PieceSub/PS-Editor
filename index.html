@@ -7,7 +7,7 @@
   </head>
   <body>
     <main id="app">
-      <header>
+      <header id="app-header">
         <div class="brand">
           <a href="#top" class="brand-link" title="PS Editor">
             <img src="/logo.png" alt="PS Editor logo" class="logo" />
@@ -25,7 +25,7 @@
         <button id="banner-close" class="icon-btn" title="Kapat" aria-label="Kapat">×</button>
       </div>
 
-      <div class="tabbar">
+      <div id="app-tabbar" class="tabbar">
         <nav class="tabs" role="tablist" aria-label="Ana görünümler">
           <button id="tab-mangas" class="tab active" role="tab" aria-selected="true" type="button">Mangalar</button>
           <button id="tab-anime" class="tab" role="tab" aria-selected="false" type="button">Anime</button>
@@ -64,7 +64,7 @@
       <!-- ------------------------- Proje düzenleme görünümü (gizli durum) ------------------------- -->
 
       <section id="editor-view" class="view hidden">
-        <div class="editor-nav">
+        <div id="editor-nav" class="editor-nav">
           <button id="btn-back-mangas" class="btn chip" type="button">← Mangalar'a dön</button>
         </div>
         <div id="editor-empty" class="editor-empty hidden">
@@ -84,6 +84,7 @@
                 <button class="seg" data-view="side" role="radio" aria-checked="false" type="button">Yan Yana</button>
               </div>
               <button id="btn-edit" class="btn chip" type="button">Düzenle</button>
+              <button id="btn-layers" class="btn chip" type="button">Katman Editörü</button>
               <button id="btn-overflow" class="btn chip active" type="button">Taşmalar</button>
               <button id="btn-export" class="btn secondary" type="button">Dışa Aktar…</button>
             </div>

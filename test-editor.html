@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PS Editor — Katman Editörü Test Düzeneği</title>
+    <!-- Headless ekran görüntüsü doğrulaması için: load olayı bu kaynaklar
+         bitene kadar bekler; editör zinciri böylece yarış kazanır. -->
+    <link rel="preload" href="/fonts/ComicNeue-Bold.ttf" as="font" type="font/ttf" crossorigin />
+  </head>
+  <body>
+    <div id="app" style="height: calc(100vh - 40px); margin: 20px"></div>
+    <img src="/test/page.png" style="display: none" alt="" />
+    <img src="/test/page_cleaned.png" style="display: none" alt="" />
+    <img src="/test/page_translated.png" style="display: none" alt="" />
+    <script type="module" src="/src/devharness.ts"></script>
+  </body>
+</html>

@@ -1356,3 +1356,318 @@ select:disabled {
 .hidden {
   display: none !important;
 }
+/* ============================================================= katman editörü */
+
+.ed-workspace {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.ed-stage-host {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+.ed-loading {
+  margin: auto;
+  color: var(--muted, #8a8a93);
+  font-size: 13px;
+}
+
+.ed-stage {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: var(--card-2);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  cursor: default;
+  touch-action: none;
+}
+
+/* Dama deseni (şeffaflık zemini) — project-thumb-placeholder deseninin aynısı */
+.ed-checker {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(45deg, var(--card) 25%, transparent 25%, transparent 75%, var(--card) 75%),
+    linear-gradient(45deg, var(--card) 25%, var(--card-2) 25%, var(--card-2) 75%, var(--card) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+  opacity: 0.5;
+}
+
+.ed-stack {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+  background: #fff;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
+}
+
+.ed-stack.pixelated canvas {
+  image-rendering: pixelated;
+}
+
+.ed-layer-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.ed-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ------------------------------------------------------------- katman paneli */
+
+.ed-side {
+  width: 268px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.ed-panel {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ed-panel-head {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+
+.ed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.ed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: var(--card-2);
+  user-select: none;
+  cursor: pointer;
+  position: relative;
+}
+
+.ed-row:hover {
+  border-color: var(--border);
+}
+
+.ed-row.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ed-row.hidden-layer .ed-thumb,
+.ed-row.hidden-layer .ed-name {
+  opacity: 0.45;
+}
+
+.ed-row.dragging {
+  opacity: 0.35;
+}
+
+.ed-row.drop-target {
+  box-shadow: 0 -2px 0 0 var(--accent);
+}
+
+.ed-grip {
+  color: #6d6d78;
+  font-size: 13px;
+  cursor: grab;
+  flex: none;
+}
+
+.ed-thumb {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 6px;
+  overflow: hidden;
+  background:
+    linear-gradient(45deg, #23232b 25%, transparent 25%, transparent 75%, #23232b 75%),
+    linear-gradient(45deg, #23232b 25%, #191920 25%, #191920 75%, #23232b 75%);
+  background-size: 10px 10px;
+  background-position: 0 0, 5px 5px;
+}
+
+.ed-thumb canvas {
+  display: block;
+}
+
+.ed-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ed-rename {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  font-size: 12.5px;
+  padding: 2px 6px;
+  outline: none;
+}
+
+.ed-eye,
+.ed-lock,
+.ed-mini {
+  flex: none;
+  background: none;
+  border: none;
+  color: #9a9aa4;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 3px;
+  border-radius: 5px;
+  line-height: 1;
+}
+
+.ed-eye:hover,
+.ed-lock:hover,
+.ed-mini:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.ed-eye.on,
+.ed-lock.on {
+  color: var(--text);
+}
+
+.ed-move-btns {
+  display: none;
+  flex: none;
+}
+
+.ed-row:hover .ed-move-btns,
+.ed-row.active .ed-move-btns {
+  display: inline-flex;
+}
+
+.ed-prop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ed-prop-label {
+  font-size: 12px;
+  color: var(--muted, #8a8a93);
+  width: 74px;
+  flex: none;
+}
+
+.ed-prop-value {
+  font-size: 12px;
+  color: var(--text);
+  width: 40px;
+  text-align: right;
+  flex: none;
+}
+
+.ed-prop-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.ed-prop-row select {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.ed-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn.small {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------ zoom pill + pan */
+
+.ed-zoom-pill {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+.ed-zoom-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ed-zoom-btn:hover {
+  background: var(--card-2);
+}
+
+.ed-zoom-label {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted, #8a8a93);
+  user-select: none;
+}
+
+.ed-stage.pan-ready {
+  cursor: grab;
+}
+
+.ed-stage.panning {
+  cursor: grabbing;
+}

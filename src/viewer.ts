@@ -63,6 +63,9 @@ export interface PageResult {
     ocr_regions?: string | null;
     before_after?: string | null;
   };
+  /** Katman editörü üst verisi (adım 10). Rust manifestte Value olarak
+   * pass-through eder; eski sayfalarda yoktur ve türetilir. */
+  layers?: unknown;
 }
 
 export type ViewMode = "compare" | "side";
