@@ -366,15 +366,40 @@ fn write_svg_from_png(png_path: String, svg_path: String) -> Result<(), String> 
 ///
 /// Her sayfa, kendi piksel boyutlarında (1 px = 1 pt ≈ 72 DPI) bir PDF
 /// sayfası olur; böylece yeniden kodlama olmadan tam çözünürlük korunur.
+///
+/// NOT: Komut async'tir — ağır kod çözme/sıkıştırma işi `spawn_blocking`
+/// ile ana thread'den ayrı çalıştırılır. Senkron komutlar Tauri'de ana
+/// thread'de koşar; çok sayfalı PDF üretimi arayüzü dondurup WebView2'nin
+/// "yanıt vermiyor" sonucuyla süreci düşürmesine yol açıyordu.
 #[tauri::command]
-fn export_pdf(image_paths: Vec<String>, out_path: String) -> Result<usize, String> {
+async fn export_pdf(image_paths: Vec<String>, out_path: String) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // İç panikler FFI sınırında süreci iptal etmesin; hata mesajına çevrilsin.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            export_pdf_impl(&image_paths, &out_path)
+        }))
+        .unwrap_or_else(|p| {
+            let msg = p
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "bilinmeyen iç hata".into());
+            Err(format!("PDF oluşturma hatası: {msg}"))
+        })
+    })
+    .await
+    .map_err(|e| format!("PDF görevi çalıştırılamadı: {e}"))?
+}
+
+/// export_pdf'in asıl gövdesi (senkron; yalnızca spawn_blocking içinde kullanın).
+fn export_pdf_impl(image_paths: &[String], out_path: &str) -> Result<usize, String> {
     if image_paths.is_empty() {
         return Err("PDF'e eklenecek sayfa yok".into());
     }
 
     let mut doc = printpdf::PdfDocument::new("PS Editor");
     let mut pages: Vec<printpdf::PdfPage> = Vec::with_capacity(image_paths.len());
-    for path in &image_paths {
+    for path in image_paths {
         let bytes = std::fs::read(path).map_err(|e| format!("Görsel okunamadı ({path}): {e}"))?;
         let img = printpdf::RawImage::decode_from_bytes(&bytes, &mut Vec::new())
             .map_err(|e| format!("Görsel çözümlenemedi ({path}): {e}"))?;
@@ -395,7 +420,7 @@ fn export_pdf(image_paths: Vec<String>, out_path: String) -> Result<usize, Strin
 
     doc.with_pages(pages);
     let pdf_bytes = doc.save(&printpdf::PdfSaveOptions::default(), &mut Vec::new());
-    std::fs::write(&out_path, pdf_bytes)
+    std::fs::write(out_path, pdf_bytes)
         .map_err(|e| format!("PDF yazılamadı ({out_path}): {e}"))?;
     Ok(image_paths.len())
 }
@@ -418,12 +443,41 @@ mod tests {
             paths.push(p.to_string_lossy().to_string());
         }
         let out = tmp.join("out.pdf");
-        let n = export_pdf(paths.clone(), out.to_string_lossy().to_string()).unwrap();
+        let n = export_pdf_impl(&paths, out.to_string_lossy().as_ref()).unwrap();
         assert_eq!(n, 2);
         let bytes = std::fs::read(&out).unwrap();
         assert!(bytes.starts_with(b"%PDF-"), "PDF başlığı yok");
         let text = String::from_utf8_lossy(&bytes);
         assert_eq!(text.matches("/Type /Page").count() + text.matches("/Type/Page").count() >= 2, true, "PDF'te 2 sayfa yok");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// export_pdf stres testi: gerçek manga sayfası boyutunda (1400×2000,
+    /// karmaşık içerik) 3 sayfayı birleştirir. Panik/yığın taşması olmamalı.
+    #[test]
+    fn export_pdf_stress_realistic() {
+        let tmp = std::env::temp_dir().join("ps_editor_pdf_stress");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut paths: Vec<String> = Vec::new();
+        // Basit LCG ile deterministik "gürültülü" (fotoğraf benzeri) içerik.
+        let mut seed: u64 = 12345;
+        let mut next = move || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as u8
+        };
+        for i in 0..3 {
+            let mut img = image::RgbImage::new(1400, 2000);
+            for px in img.pixels_mut() {
+                *px = image::Rgb([next(), next(), next()]);
+            }
+            let p = tmp.join(format!("big{i}.png"));
+            img.save_with_format(&p, image::ImageFormat::Png).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+        let out = tmp.join("stress.pdf");
+        let n = export_pdf_impl(&paths, out.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(n, 3);
+        assert!(std::fs::metadata(&out).unwrap().len() > 100_000);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
