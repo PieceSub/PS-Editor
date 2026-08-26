@@ -304,22 +304,155 @@ fn list_images(dir: String) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Dosyayı hedef klasöre kopyalar (dışa aktarma). Aynı ad varsa üzerine yazar.
+/// Dosyayı verilen hedef yoluna kopyalar (dışa aktarma; ad değiştirilebilir).
 #[tauri::command]
-fn copy_file(src: String, dst_dir: String) -> Result<String, String> {
-    let src_path = Path::new(&src);
-    let name = src_path
-        .file_name()
-        .ok_or_else(|| "Kaynak dosya adı alınamadı".to_string())?;
-    let dst = Path::new(&dst_dir).join(name);
-    std::fs::copy(src_path, &dst).map_err(|e| format!("Dosya kopyalanamadı: {e}"))?;
-    Ok(dst.to_string_lossy().to_string())
+fn copy_file(src: String, dst: String) -> Result<(), String> {
+    if let Some(parent) = Path::new(&dst).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Hedef klasör oluşturulamadı: {e}"))?;
+    }
+    std::fs::copy(&src, &dst).map_err(|e| format!("Dosya kopyalanamadı: {e}"))?;
+    Ok(())
 }
 
-/// Metin dosyası yazar (ör. dışa aktarmada sonuç JSON'u).
+/// İç içe klasör oluşturur (dışa aktarmada proje klasörü için).
+#[tauri::command]
+fn create_dir(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| format!("Klasör oluşturulamadı: {e}"))
+}
+
+/// Metin dosyası yazar (ör. dışa aktarmada SVG çıktısı).
 #[tauri::command]
 fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    if let Some(parent) = Path::new(&path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Hedef klasör oluşturulamadı: {e}"))?;
+    }
     std::fs::write(&path, contents).map_err(|e| format!("Dosya yazılamadı: {e}"))
+}
+
+/// PNG'yi gömülü raster içeren bir SVG'ye sarar (dışa aktarma).
+///
+/// Sayfalar piksel tabanlı olduğu için "gerçek" vektör SVG üretilemez;
+/// PNG base64 olarak `<image>` içine gömülür ve IHDR başlığından
+/// okunan genişlik/yükseklik viewBox olur. Böylece dosya tarayıcı ve
+/// vektör yazılımlarda orijinal boyutta açılır.
+#[tauri::command]
+fn write_svg_from_png(png_path: String, svg_path: String) -> Result<(), String> {
+    use base64::Engine as _;
+
+    let bytes =
+        std::fs::read(&png_path).map_err(|e| format!("PNG okunamadı ({png_path}): {e}"))?;
+    // PNG imzası (8 bayt) + IHDR uzunluk/tipi (8 bayt) → 16..24 arası W/H (big-endian).
+    if bytes.len() < 24
+        || bytes[0..8] != [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+        || &bytes[12..16] != b"IHDR"
+    {
+        return Err(format!("Geçersiz PNG dosyası: {png_path}"));
+    }
+    let w = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let h = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+         xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+         width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">\
+         <image width=\"{w}\" height=\"{h}\" xlink:href=\"data:image/png;base64,{b64}\"/>\
+         </svg>"
+    );
+    write_text_file(svg_path, svg)
+}
+
+/// Görselleri sırayla tek bir PDF'te birleştirir (dışa aktarma).
+///
+/// Her sayfa, kendi piksel boyutlarında (1 px = 1 pt ≈ 72 DPI) bir PDF
+/// sayfası olur; böylece yeniden kodlama olmadan tam çözünürlük korunur.
+#[tauri::command]
+fn export_pdf(image_paths: Vec<String>, out_path: String) -> Result<usize, String> {
+    if image_paths.is_empty() {
+        return Err("PDF'e eklenecek sayfa yok".into());
+    }
+
+    let mut doc = printpdf::PdfDocument::new("PS Editor");
+    let mut pages: Vec<printpdf::PdfPage> = Vec::with_capacity(image_paths.len());
+    for path in &image_paths {
+        let bytes = std::fs::read(path).map_err(|e| format!("Görsel okunamadı ({path}): {e}"))?;
+        let img = printpdf::RawImage::decode_from_bytes(&bytes, &mut Vec::new())
+            .map_err(|e| format!("Görsel çözümlenemedi ({path}): {e}"))?;
+        // 1 px = 1 pt: sayfa boyutu piksel ölçüleriyle birebir aynı olur.
+        let id = doc.add_image(&img);
+        pages.push(printpdf::PdfPage::new(
+            printpdf::Pt(img.width as f32).into(),
+            printpdf::Pt(img.height as f32).into(),
+            vec![printpdf::Op::UseXobject {
+                id,
+                transform: printpdf::XObjectTransform {
+                    dpi: Some(72.0),
+                    ..printpdf::XObjectTransform::default()
+                },
+            }],
+        ));
+    }
+
+    doc.with_pages(pages);
+    let pdf_bytes = doc.save(&printpdf::PdfSaveOptions::default(), &mut Vec::new());
+    std::fs::write(&out_path, pdf_bytes)
+        .map_err(|e| format!("PDF yazılamadı ({out_path}): {e}"))?;
+    Ok(image_paths.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// export_pdf duman testi: iki küçük PNG'yi birleştirir, çıktının
+    /// geçerli bir PDF olduğunu (başlık + sayfa sayısı) kontrol eder.
+    #[test]
+    fn export_pdf_smoke() {
+        let tmp = std::env::temp_dir().join("ps_editor_pdf_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mut paths: Vec<String> = Vec::new();
+        for i in 0..2 {
+            let img = image::RgbImage::from_pixel(40 + i * 10, 30, image::Rgb([200, 30, 30]));
+            let p = tmp.join(format!("p{i}.png"));
+            img.save_with_format(&p, image::ImageFormat::Png).unwrap();
+            paths.push(p.to_string_lossy().to_string());
+        }
+        let out = tmp.join("out.pdf");
+        let n = export_pdf(paths.clone(), out.to_string_lossy().to_string()).unwrap();
+        assert_eq!(n, 2);
+        let bytes = std::fs::read(&out).unwrap();
+        assert!(bytes.starts_with(b"%PDF-"), "PDF başlığı yok");
+        let text = String::from_utf8_lossy(&bytes);
+        assert_eq!(text.matches("/Type /Page").count() + text.matches("/Type/Page").count() >= 2, true, "PDF'te 2 sayfa yok");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// write_svg_from_png duman testi: PNG'yi SVG'ye sarar, çıktıda
+    /// doğru boyut ve gömülü veri olduğunu kontrol eder.
+    #[test]
+    fn svg_wrap_smoke() {
+        let tmp = std::env::temp_dir().join("ps_editor_svg_test");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let png = tmp.join("a.png");
+        image::RgbImage::from_pixel(40, 30, image::Rgb([10, 20, 30]))
+            .save_with_format(&png, image::ImageFormat::Png)
+            .unwrap();
+        let svg = tmp.join("a.svg");
+        write_svg_from_png(
+            png.to_string_lossy().to_string(),
+            svg.to_string_lossy().to_string(),
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(&svg).unwrap();
+        assert!(text.starts_with("<svg "), "SVG başlangıcı yok");
+        assert!(text.contains("width=\"40\""), "genişlik yanlış");
+        assert!(text.contains("height=\"30\""), "yükseklik yanlış");
+        assert!(
+            text.contains("data:image/png;base64,"),
+            "gömülü PNG verisi yok"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }
 
 /* ------------------------------------------------------------- ön yüz tercihleri */
@@ -402,7 +535,10 @@ pub fn run() {
             python_status,
             list_images,
             copy_file,
+            create_dir,
             write_text_file,
+            write_svg_from_png,
+            export_pdf,
             load_pref,
             save_pref,
             app_is_dev,

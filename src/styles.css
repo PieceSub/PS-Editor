@@ -1344,6 +1344,15 @@ select:disabled {
   margin-top: 18px;
 }
 
+/* Dışa aktarma modalında seçilen klasör yolu (taşarsa kırpılır). */
+.export-folder-text {
+  display: block;
+  margin-top: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .btn.danger {
   background: var(--err);
   color: #fff;

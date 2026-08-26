@@ -207,6 +207,39 @@
       </div>
     </div>
 
+    <!-- ------------------------- Dışa aktarma (modal) ------------------------- -->
+
+    <div id="export-modal" class="modal hidden" aria-hidden="true">
+      <div id="export-backdrop" class="modal-backdrop"></div>
+      <div class="modal-card confirm-card">
+        <h2>Dışa Aktar</h2>
+        <p class="hint">Hedef klasörü ve formatı seçin.</p>
+
+        <div class="field">
+          <label class="field-label">Kaydedilecek klasör</label>
+          <div class="row" style="margin-top: 0;">
+            <button id="export-folder-btn" class="btn secondary" type="button">Klasör Seç…</button>
+          </div>
+          <span id="export-folder-text" class="hint export-folder-text">Seçilmedi</span>
+        </div>
+
+        <div class="field">
+          <label class="field-label">Format</label>
+          <div class="segmented" id="export-format-group" role="radiogroup" aria-label="Dışa aktarma formatı">
+            <button class="seg active" data-fmt="png" role="radio" aria-checked="true" type="button">PNG</button>
+            <button class="seg" data-fmt="svg" role="radio" aria-checked="false" type="button">SVG</button>
+            <button class="seg" data-fmt="pdf" role="radio" aria-checked="false" type="button">PDF</button>
+          </div>
+          <p class="hint" id="export-format-hint"></p>
+        </div>
+
+        <div class="row confirm-row">
+          <button id="export-cancel" class="btn secondary" type="button">Vazgeç</button>
+          <button id="export-confirm" class="btn primary" type="button" disabled>Dışa Aktar</button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

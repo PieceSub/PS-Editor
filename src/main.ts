@@ -172,6 +172,14 @@ const els = {
   confirmMessage: $<HTMLElement>("confirm-message"),
   confirmOk: $<HTMLButtonElement>("confirm-ok"),
   confirmCancel: $<HTMLButtonElement>("confirm-cancel"),
+  exportModal: $<HTMLDivElement>("export-modal"),
+  exportBackdrop: $<HTMLDivElement>("export-backdrop"),
+  exportFolderBtn: $<HTMLButtonElement>("export-folder-btn"),
+  exportFolderText: $<HTMLSpanElement>("export-folder-text"),
+  exportFormatGroup: $<HTMLDivElement>("export-format-group"),
+  exportFormatHint: $<HTMLParagraphElement>("export-format-hint"),
+  exportConfirm: $<HTMLButtonElement>("export-confirm"),
+  exportCancel: $<HTMLButtonElement>("export-cancel"),
   btnPickFile: $<HTMLButtonElement>("btn-pick-file"),
   btnPickFolder: $<HTMLButtonElement>("btn-pick-folder"),
   sourceInfo: $<HTMLDivElement>("source-info"),
@@ -1110,36 +1118,130 @@ function editorApi(): EditorApi {
 
 /* ----------------------------------------------------------- dışa aktarma */
 
-async function exportResults(): Promise<void> {
-  if (!state.done.length) return;
-  const dir = await open({ directory: true, multiple: false, title: "Sonuçların kaydedileceği klasörü seçin" });
-  if (!dir) return;
-  const folder = Array.isArray(dir) ? dir[0] : dir;
+type ExportFormat = "png" | "svg" | "pdf";
 
-  let copied = 0;
-  const errors: string[] = [];
-  for (const item of state.done) {
-    const r = item.result;
-    const base = stripExt(item.name);
+const EXPORT_DIR_PREF_KEY = "last_export_dir";
+
+const EXPORT_FORMAT_HINTS: Record<ExportFormat, string> = {
+  png: 'Her sayfa ayrı PNG olarak proje adıyla aynı isimli klasöre kaydedilir.',
+  svg: 'Her sayfa, PNG gömülü bir SVG dosyası olarak proje klasörüne kaydedilir.',
+  pdf: 'Tüm sayfalar tek bir PDF dosyasında, sayfa numarası sırasına göre birleştirilir.',
+};
+
+let exportDir: string | null = null;
+let exportFmt: ExportFormat = "png";
+let exportBusy = false;
+
+/** Dosya/klasör adında geçersiz karakterleri temizler. */
+function sanitizeFsName(name: string): string {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|]/g, "_")
+    .trim()
+    .replace(/\.+$/, "");
+  return cleaned || "Cikti";
+}
+
+/** İki yol parçasını platformdan bağımsız "/" ile birleştirir. */
+function joinPath(dir: string, name: string): string {
+  return `${dir.replace(/[\\/]+$/, "")}/${name}`;
+}
+
+function setExportFormat(fmt: ExportFormat): void {
+  exportFmt = fmt;
+  for (const btn of els.exportFormatGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
+    const active = btn.dataset.fmt === fmt;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-checked", String(active));
+  }
+  els.exportFormatHint.textContent = EXPORT_FORMAT_HINTS[fmt];
+}
+
+function updateExportUi(): void {
+  els.exportFolderText.textContent = exportDir ?? "Seçilmedi";
+  els.exportConfirm.disabled = !exportDir || exportBusy;
+  els.exportFolderBtn.disabled = exportBusy;
+}
+
+async function openExportModal(): Promise<void> {
+  if (!state.done.length) return;
+  setExportFormat(exportFmt);
+  updateExportUi();
+  els.exportModal.classList.remove("hidden");
+  els.exportModal.setAttribute("aria-hidden", "false");
+  // Son kullanılan klasörü tercihlerden yükle (bu oturumda seçim yapılmadıysa).
+  if (!exportDir) {
     try {
-      if (r.outputs.translated) {
-        await invoke("copy_file", { src: r.outputs.translated, dstDir: folder });
+      const v = (await invoke("load_pref", { key: EXPORT_DIR_PREF_KEY })) as unknown;
+      if (typeof v === "string" && v) {
+        exportDir = v;
+        updateExportUi();
       }
-      await invoke("write_text_file", {
-        path: `${folder}/${base}_result.json`,
-        contents: JSON.stringify({ ...r, source_image: item.input }, null, 2),
-      });
-      copied++;
-    } catch (err) {
-      errors.push(String(err));
+    } catch {
+      /* tercih okunamadı; kullanıcı elle seçer */
     }
   }
-  showBanner(
-    errors.length
-      ? `${copied} sayfa dışa aktarıldı; ${errors.length} hata (${errors[0]})`
-      : `${copied} sayfa dışa aktarıldı → ${folder}`,
-    errors.length ? "error" : "ok",
-  );
+}
+
+function closeExportModal(): void {
+  if (exportBusy) return; // aktarım sürerken kapatılamaz
+  els.exportModal.classList.add("hidden");
+  els.exportModal.setAttribute("aria-hidden", "true");
+}
+
+async function pickExportFolder(): Promise<void> {
+  const dir = await open({ directory: true, multiple: false, title: "Dışa aktarma klasörünü seçin" });
+  if (!dir) return;
+  exportDir = Array.isArray(dir) ? dir[0] : dir;
+  // Bir dahaki sefere hatırlansın.
+  invoke("save_pref", { key: EXPORT_DIR_PREF_KEY, value: exportDir }).catch(() => {});
+  updateExportUi();
+}
+
+async function runExport(): Promise<void> {
+  if (!state.done.length || !exportDir || exportBusy) return;
+  // Çevrilmiş görseli olmayan sayfalar atlanır.
+  const items = state.done.filter((i) => i.result.outputs.translated);
+  if (!items.length) {
+    showBanner("Dışa aktarılacak çevrilmiş sayfa yok.", "error");
+    return;
+  }
+  const projectName = sanitizeFsName(state.activeProject?.name ?? "Cikti");
+
+  exportBusy = true;
+  updateExportUi();
+  els.exportConfirm.textContent = "Aktarılıyor…";
+  try {
+    let target: string;
+    if (exportFmt === "pdf") {
+      // Tüm sayfalar tek PDF'te, sayfa sırasına göre birleştirilir.
+      target = joinPath(exportDir, `${projectName}.pdf`);
+      await invoke("export_pdf", {
+        imagePaths: items.map((i) => i.result.outputs.translated),
+        outPath: target,
+      });
+    } else {
+      // PNG/SVG: seçilen klasörün içinde proje adıyla klasör oluşturulur.
+      target = joinPath(exportDir, projectName);
+      await invoke("create_dir", { path: target });
+      for (const item of items) {
+        const src = item.result.outputs.translated as string;
+        const dst = joinPath(target, `${stripExt(item.name)}.${exportFmt}`);
+        if (exportFmt === "svg") {
+          await invoke("write_svg_from_png", { pngPath: src, svgPath: dst });
+        } else {
+          await invoke("copy_file", { src, dst });
+        }
+      }
+    }
+    closeExportModal();
+    showBanner(`${items.length} sayfa ${exportFmt.toUpperCase()} olarak dışa aktarıldı → ${target}`, "ok");
+  } catch (err) {
+    showBanner(`Dışa aktarma hatası: ${String(err)}`, "error");
+  } finally {
+    exportBusy = false;
+    els.exportConfirm.textContent = "Dışa Aktar";
+    updateExportUi();
+  }
 }
 
 /* -------------------------------------------------------------- olaylar */
@@ -1211,6 +1313,8 @@ async function initEvents(): Promise<void> {
     if (ev.key !== "Escape") return;
     if (!els.confirmModal.classList.contains("hidden")) {
       closeConfirm();
+    } else if (!els.exportModal.classList.contains("hidden")) {
+      closeExportModal();
     } else if (!els.newProjectModal.classList.contains("hidden") && !state.running) {
       closeNewProjectModal();
     }
@@ -1265,7 +1369,18 @@ async function initEvents(): Promise<void> {
     state.cancelRequested = true;
     els.btnCancel.disabled = true;
   });
-  els.btnExport.addEventListener("click", () => void exportResults());
+  els.btnExport.addEventListener("click", () => void openExportModal());
+
+  els.exportFolderBtn.addEventListener("click", () => void pickExportFolder());
+  els.exportConfirm.addEventListener("click", () => void runExport());
+  els.exportCancel.addEventListener("click", closeExportModal);
+  els.exportBackdrop.addEventListener("click", closeExportModal);
+  for (const btn of els.exportFormatGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
+    btn.addEventListener("click", () => {
+      const fmt = btn.dataset.fmt as ExportFormat | undefined;
+      if (fmt) setExportFormat(fmt);
+    });
+  }
 }
 
 /* ----------------------------------------------------------------- kur */
