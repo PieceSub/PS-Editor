@@ -13,8 +13,6 @@ import {
   type ViewMode,
 } from "./viewer";
 import { renderEditor, type EditorApi } from "./editor";
-import { mountEditor, type EditorHandle } from "./editor/index";
-import type { LayerMeta } from "./editor/types";
 
 /* ------------------------------------------------------------------ state */
 
@@ -104,9 +102,6 @@ const state = {
   showBoxes: false,
   currentJob: "",
   editMode: false,
-  /** Katman tabanlı yeni editör açık mı? (editMode'dan bağımsız mod) */
-  layersMode: false,
-  layersHandle: null as EditorHandle | null,
   selectedRegionId: null as number | null,
   projects: [] as ProjectSummary[],
   activeProject: null as { id: string; name: string } | null,
@@ -206,7 +201,6 @@ const els = {
   overflowWarning: $<HTMLDivElement>("overflow-warning"),
   btnOverflow: $<HTMLButtonElement>("btn-overflow"),
   btnEdit: $<HTMLButtonElement>("btn-edit"),
-  btnLayers: $<HTMLButtonElement>("btn-layers"),
   btnExport: $<HTMLButtonElement>("btn-export"),
   viewModeGroup: $<HTMLDivElement>("view-mode-group"),
   thumbs: $<HTMLDivElement>("thumbs"),
@@ -426,9 +420,6 @@ async function openProject(id: string): Promise<void> {
     }));
     state.selected = 0;
     state.editMode = false;
-    state.layersMode = false;
-    els.btnLayers?.classList.remove("active");
-    destroyLayersEditor();
     state.selectedRegionId = null;
     const t = Date.parse(manifest.updated_at);
     state.savedAt = Number.isFinite(t) ? t : Date.now();
@@ -850,27 +841,22 @@ function renderSelected(): void {
   if (!item) return;
   const r = item.result;
 
-  if (state.layersMode) {
-    mountLayersEditor(item);
+  if (state.editMode) {
+    renderEditor(els.viewer, r, state.selectedRegionId, item.imgVer, editorApi());
   } else {
-    destroyLayersEditor();
-    if (state.editMode) {
-      renderEditor(els.viewer, r, state.selectedRegionId, item.imgVer, editorApi());
-    } else {
-      renderViewer(els.viewer, r, {
-        mode: state.viewMode,
-        showBoxes: state.showBoxes,
-        ver: item.imgVer,
-        onSelect: (region) => {
-          state.editMode = true;
-          state.selectedRegionId = region.id;
-          els.btnEdit.classList.add("active");
-          els.btnEdit.textContent = "Düzenle (açık)";
-          updateChrome();
-          renderSelected();
-        },
-      });
-    }
+    renderViewer(els.viewer, r, {
+      mode: state.viewMode,
+      showBoxes: state.showBoxes,
+      ver: item.imgVer,
+      onSelect: (region) => {
+        state.editMode = true;
+        state.selectedRegionId = region.id;
+        els.btnEdit.classList.add("active");
+        els.btnEdit.textContent = "Düzenle (açık)";
+        updateChrome();
+        renderSelected();
+      },
+    });
   }
 
   const meta: string[] = [
@@ -902,53 +888,9 @@ function setEditMode(on: boolean): void {
   els.btnEdit.textContent = on ? "Düzenle (açık)" : "Düzenle";
   updateChrome();
   if (on) {
-    // Klasik editör açılırken katman modu kapatılır (o da render'lar).
-    setLayersMode(false);
     return;
   }
   state.selectedRegionId = null;
-  renderSelected();
-}
-
-/* ------------------------------------------------------- katman editörü modu */
-
-/** Debounce'lu proje kaydı: panelde opaklık kaydırıcısı gibi hızlı ardışık
- * değişimlerde tek yazma (önceki adımlardaki eylem-bazlı autosave kuralı). */
-let layersSaveTimer: number | undefined;
-function scheduleProjectSave(): void {
-  window.clearTimeout(layersSaveTimer);
-  layersSaveTimer = window.setTimeout(() => void saveProject(), 700);
-}
-
-function mountLayersEditor(item: DonePage): void {
-  destroyLayersEditor();
-  state.layersHandle = mountEditor(els.viewer, {
-    page: item.result,
-    resolveUrl: (p) => pageImageUrl(p),
-    onPersist: (layers: LayerMeta[]) => {
-      item.result.layers = layers;
-      scheduleProjectSave();
-    },
-  });
-}
-
-function destroyLayersEditor(): void {
-  state.layersHandle?.destroy();
-  state.layersHandle = null;
-}
-
-function setLayersMode(on: boolean): void {
-  state.layersMode = on;
-  els.btnLayers.classList.toggle("active", on);
-  // Katman editörü açıldıysa klasik düzenleme kapanır.
-  if (on && state.editMode) {
-    state.editMode = false;
-    els.btnEdit.classList.remove("active");
-    els.btnEdit.textContent = "Düzenle";
-    state.selectedRegionId = null;
-    updateChrome();
-  }
-  if (!on) destroyLayersEditor();
   renderSelected();
 }
 
@@ -1363,7 +1305,6 @@ async function initEvents(): Promise<void> {
   });
 
   els.btnEdit.addEventListener("click", () => setEditMode(!state.editMode));
-  els.btnLayers.addEventListener("click", () => setLayersMode(!state.layersMode));
 
   els.btnStart.addEventListener("click", () => void run());
   els.btnCancel.addEventListener("click", () => {
