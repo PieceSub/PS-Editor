@@ -610,11 +610,16 @@ pub fn run() {
             // dizisi kaldırıldı): sağ tık menüsünü engelleyen script'in sayfa
             // yüklemesinden ÖNCE enjekte edilmesi için initialization_script
             // gerekir (setup içinde eval yapmak ilk yüklemede kaybolur).
+            let icon_bytes = include_bytes!("../icons/icon.png");
+            let icon = tauri::image::Image::from_bytes(icon_bytes)
+                .map_err(|e| format!("Pencere ikonu yüklenemedi: {e}"))?;
+
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                 .title("PS Editor")
                 .inner_size(1180.0, 820.0)
                 .min_inner_size(860.0, 600.0)
                 .resizable(true)
+                .icon(icon)?
                 .initialization_script(CONTEXT_MENU_BLOCK_SCRIPT)
                 .build()?;
 
