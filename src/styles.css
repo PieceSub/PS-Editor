@@ -781,8 +781,12 @@ select:disabled {
   background: rgba(120, 170, 255, 0.08);
   border-radius: 2px;
   pointer-events: auto;
-  cursor: move;
+  cursor: pointer;
   overflow: visible;
+}
+
+.reg-box.selected {
+  cursor: move;
 }
 
 .reg-box:hover {

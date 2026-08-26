@@ -156,9 +156,10 @@ export function renderEditor(
 
   function renderOverlay(): void {
     overlay.replaceChildren();
+    // bbox backend'de [x1, y1, x2, y2] formatındadır (pipeline.py ile aynı).
     for (const r of page.regions) {
       if (r.bbox.length < 4) continue;
-      const [x, y, w, h] = r.bbox;
+      const [x1, y1, x2, y2] = r.bbox;
       const box = el("div", "reg-box");
       if (r.disabled) box.classList.add("disabled");
       if (r.manual) box.classList.add("manual");
@@ -167,10 +168,10 @@ export function renderEditor(
         box.classList.add("selected");
         box.classList.toggle("dirty", dirty);
       }
-      box.style.left = pct(x, imgW);
-      box.style.top = pct(y, imgH);
-      box.style.width = pct(w, imgW);
-      box.style.height = pct(h, imgH);
+      box.style.left = pct(x1, imgW);
+      box.style.top = pct(y1, imgH);
+      box.style.width = pct(Math.max(0, x2 - x1), imgW);
+      box.style.height = pct(Math.max(0, y2 - y1), imgH);
       box.dataset.rid = String(r.id);
       box.title = `${r.label_name || "Bölge"}${r.manual ? " (elle)" : ""}${r.disabled ? " — kapalı" : ""}`;
 
@@ -215,13 +216,31 @@ export function renderEditor(
 
   /* ------------------------------------------------------- sürükle-çiz / taşı */
 
+  /** Tıklanan noktayı içeren en küçük alanlı bölgeyi döndürür. Üst üste
+   * binen kutularda DOM/z sırası değil, en spesifik (küçük) kutu kazanır. */
+  function hitRegion(ix: number, iy: number): Region | null {
+    let best: Region | null = null;
+    let bestArea = Infinity;
+    for (const r of page.regions) {
+      if (r.bbox.length < 4) continue;
+      const [x1, y1, x2, y2] = r.bbox;
+      if (ix < x1 || ix > x2 || iy < y1 || iy > y2) continue;
+      const area = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+      if (area < bestArea) {
+        bestArea = area;
+        best = r;
+      }
+    }
+    return best;
+  }
+
   stage.addEventListener("pointerdown", (ev) => {
     if (applying) return;
-    const target = (ev.target as HTMLElement).closest(".reg-box");
-    if (target) {
-      const rid = Number((target as HTMLElement).dataset.rid ?? -1);
-      if (rid !== selectedId) {
-        api.onSelect(Number.isFinite(rid) ? rid : null);
+    const [ix, iy] = toImg(ev.clientX, ev.clientY);
+    const hit = hitRegion(ix, iy);
+    if (hit) {
+      if (hit.id !== selectedId) {
+        api.onSelect(hit.id);
         return;
       }
       // Seçili kutuya basınca taşıma başlar
@@ -234,7 +253,6 @@ export function renderEditor(
       return;
     }
     // Boş alan: çizim başlar
-    const [ix, iy] = toImg(ev.clientX, ev.clientY);
     drawStart = { x: ix, y: iy };
     renderOverlay();
     stage.setPointerCapture(ev.pointerId);

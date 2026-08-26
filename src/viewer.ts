@@ -105,17 +105,25 @@ function imgFor(path: string, alt: string, ver?: number): HTMLImageElement {
 
 function regionRect(regions: Region[], imgW: number, imgH: number, onSelect: RegionClickHandler | null): HTMLElement {
   const layer = el("div", "ov-layer");
-  for (const r of regions) {
-    if (r.bbox.length < 4) continue;
-    const [x, y, w, h] = r.bbox;
+  // bbox backend'de [x1, y1, x2, y2] formatındadır (pipeline.py ile aynı).
+  // Büyükten küçüğe sıralarız: üst üste binen kutularda tıklamayı en küçük
+  // (en spesifik) kutu alır — yanlış bölge seçimi engellenir.
+  const ordered = [...regions]
+    .filter((r) => r.bbox.length >= 4)
+    .sort((a, b) => {
+      const area = (b: number[]) => Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
+      return area(b.bbox) - area(a.bbox);
+    });
+  for (const r of ordered) {
+    const [x1, y1, x2, y2] = r.bbox;
     const box = el("div", "ov-rect");
     if (r.overflow && !r.disabled) box.classList.add("overflow");
     if (r.disabled) box.classList.add("disabled");
     if (r.manual) box.classList.add("manual");
-    box.style.left = `${(x / imgW) * 100}%`;
-    box.style.top = `${(y / imgH) * 100}%`;
-    box.style.width = `${(w / imgW) * 100}%`;
-    box.style.height = `${(h / imgH) * 100}%`;
+    box.style.left = `${(x1 / imgW) * 100}%`;
+    box.style.top = `${(y1 / imgH) * 100}%`;
+    box.style.width = `${(Math.max(0, x2 - x1) / imgW) * 100}%`;
+    box.style.height = `${(Math.max(0, y2 - y1) / imgH) * 100}%`;
     const meta = [
       r.label_name || "Bölge",
       r.manual ? "(elle)" : "",
