@@ -683,9 +683,19 @@ select:disabled {
 
 .ov-rect {
   position: absolute;
+  border: 1px dashed rgba(255, 255, 255, 0.35);
+  background: transparent;
+  border-radius: 3px;
+}
+
+/* metin taşan bölgeler: belirgin kırmızı */
+.ov-rect.overflow {
   border: 2px dashed var(--err);
   background: rgba(255, 92, 92, 0.14);
-  border-radius: 3px;
+}
+
+.ov-rect.disabled {
+  opacity: 0.4;
 }
 
 .ov-rect.clickable {

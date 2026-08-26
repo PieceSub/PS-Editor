@@ -100,7 +100,8 @@ const state = {
   failedCount: 0,
   selected: 0,
   viewMode: "compare" as ViewMode,
-  showOverflow: true,
+  /** Sonuç görünümünde bölge kutuları görünür mü? (varsayılan: kapalı, sayfa temiz kalsın) */
+  showBoxes: false,
   currentJob: "",
   editMode: false,
   /** Katman tabanlı yeni editör açık mı? (editMode'dan bağımsız mod) */
@@ -858,7 +859,7 @@ function renderSelected(): void {
     } else {
       renderViewer(els.viewer, r, {
         mode: state.viewMode,
-        showOverflow: state.showOverflow,
+        showBoxes: state.showBoxes,
         ver: item.imgVer,
         onSelect: (region) => {
           state.editMode = true;
@@ -1356,8 +1357,8 @@ async function initEvents(): Promise<void> {
   }
 
   els.btnOverflow.addEventListener("click", () => {
-    state.showOverflow = !state.showOverflow;
-    els.btnOverflow.classList.toggle("active", state.showOverflow);
+    state.showBoxes = !state.showBoxes;
+    els.btnOverflow.classList.toggle("active", state.showBoxes);
     renderSelected();
   });
 

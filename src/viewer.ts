@@ -153,7 +153,7 @@ function fitStage(stage: HTMLElement, naturalW: number, naturalH: number): void 
 
 interface OverlayInput {
   regions: Region[];
-  showOverflow: boolean;
+  showBoxes: boolean;
   onSelect: RegionClickHandler | null;
   ver?: number;
 }
@@ -193,16 +193,13 @@ function buildCompareStage(
   stage.append(after, beforeClip, divider, tagBefore, tagAfter, range);
 
   const overlays = el("div", "ov-layer");
+  overlays.classList.toggle("hidden", !input.showBoxes);
   stage.appendChild(overlays);
 
   let imgW = 1;
   let imgH = 1;
   const scaleOverlays = () => {
-    const fresh = regionRect(input.regions, imgW, imgH, input.onSelect);
-    if (!input.showOverflow) {
-      fresh.querySelectorAll(".ov-rect.overflow").forEach((b) => b.classList.add("hidden"));
-    }
-    overlays.replaceChildren(fresh);
+    overlays.replaceChildren(regionRect(input.regions, imgW, imgH, input.onSelect));
   };
   scaleOverlays();
 
@@ -256,6 +253,7 @@ function buildSideBySide(
   afterPanel.appendChild(el("figcaption", "", "Çevrilmiş"));
 
   const overlays = el("div", "ov-layer");
+  overlays.classList.toggle("hidden", !input.showBoxes);
   afterPanel.appendChild(overlays);
 
   void Promise.all([
@@ -266,11 +264,7 @@ function buildSideBySide(
         const h = afterImg.naturalHeight || 1;
         fitSidePanels(grid, w, h);
         resizeHandler = () => fitSidePanels(grid, w, h);
-        const fresh = regionRect(input.regions, w, h, input.onSelect);
-        if (!input.showOverflow) {
-          fresh.querySelectorAll(".ov-rect.overflow").forEach((b) => b.classList.add("hidden"));
-        }
-        overlays.replaceChildren(fresh);
+        overlays.replaceChildren(regionRect(input.regions, w, h, input.onSelect));
       })
       .catch(() => undefined),
     beforeImg.decode().catch(() => undefined),
@@ -282,7 +276,8 @@ function buildSideBySide(
 
 export interface RenderOptions {
   mode: ViewMode;
-  showOverflow: boolean;
+  /** Bölge kutuları görünür mü? */
+  showBoxes: boolean;
   /** Bölgelere tıklanabilirlik + seçim geri çağrısı (editör modu). */
   onSelect?: RegionClickHandler;
   /** Düzenleme sonrası görsel yenileme sürümü (cache-bust). */
@@ -299,7 +294,7 @@ export function renderViewer(container: HTMLElement, page: PageResult, opts: Ren
   resizeHandler = null;
   const input: OverlayInput = {
     regions: page.regions,
-    showOverflow: opts.showOverflow,
+    showBoxes: opts.showBoxes,
     onSelect: opts.onSelect ?? null,
     ver: opts.ver,
   };
