@@ -1196,6 +1196,7 @@ async function toggleFullscreen(): Promise<void> {
 }
 
 async function initEvents(): Promise<void> {
+  let sidecarStatusEventSeen = false;
   await listen("python-event", (ev) => {
     const msg = ev.payload as Record<string, unknown> | undefined;
     if (!msg || typeof msg !== "object") return;
@@ -1206,13 +1207,27 @@ async function initEvents(): Promise<void> {
     if (name === "translate_page_progress" && payload) {
       onProgress(payload);
     } else if (name === "ready") {
+      sidecarStatusEventSeen = true;
       setBadge("ok", "Python servisi hazır");
     } else if (name === "exit") {
+      sidecarStatusEventSeen = true;
       setBadge("error", "Python servisi kapandı");
     } else if (name === "error") {
+      sidecarStatusEventSeen = true;
       setBadge("error", "Python servisi hatası");
     }
   });
+
+  // Sidecar, WebView yüklenmeden önce hazır olabilir; bu durumda ilk "ready"
+  // olayı dinleyici kurulmadan kaçar. Gerçek bir ping ile rozet durumunu
+  // eşitle; isteği beklemeyerek bozuk bir servisin arayüz açılışını durdurma.
+  void request("ping")
+    .then(() => {
+      if (!sidecarStatusEventSeen) setBadge("ok", "Python servisi hazır");
+    })
+    .catch(() => {
+      if (!sidecarStatusEventSeen) setBadge("error", "Python servisi yanıt vermiyor");
+    });
 
   els.bannerClose.addEventListener("click", hideBanner);
   els.btnPickFile.addEventListener("click", () => void pickFile());

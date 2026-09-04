@@ -186,12 +186,14 @@ fn spawn_python_command(
 /// Geliştirme modu: python/.venv + sidecar.py kaynak dosyası.
 fn spawn_python_dev(app: &AppHandle, state: &Arc<PyState>) -> Result<(), String> {
     let manifest = env!("CARGO_MANIFEST_DIR");
-    let python = Path::new(manifest)
-        .join("..")
-        .join("python")
-        .join(".venv")
-        .join("Scripts")
-        .join("python.exe");
+    let venv = Path::new(manifest).join("..").join("python").join(".venv");
+    // venv yürütülebilirinin konumu platforma göre değişir. Windows yolu
+    // korunurken Linux/macOS standart POSIX düzenini kullanır.
+    let python = if cfg!(windows) {
+        venv.join("Scripts").join("python.exe")
+    } else {
+        venv.join("bin").join("python")
+    };
     if !python.exists() {
         return Err(format!(
             "Python sanal ortamı bulunamadı: {}. Önce 'npm run setup:python' çalıştırın.",
@@ -219,6 +221,67 @@ fn spawn_python_dev(app: &AppHandle, state: &Arc<PyState>) -> Result<(), String>
 const CONTEXT_MENU_BLOCK_SCRIPT: &str = r#"
   window.addEventListener("contextmenu", (event) => event.preventDefault(), true);
 "#;
+
+/// NVIDIA ile çalışan Hyprland oturumlarında WebKitGTK'nin DMA-BUF yolu bazı
+/// sürücü/WebKit birleşimlerinde boş pencere üretebilir. Bu durumda daha dar
+/// kapsamlı paylaşımlı bellek taşımasını seçeriz. Ayar yalnız Linux'ta, yalnız
+/// Hyprland + tüm DRM kartları NVIDIA iken uygulanır; kullanıcının verdiği
+/// WebKit ayarları, KDE/diğer masaüstleri ve Windows aynen korunur.
+#[cfg(target_os = "linux")]
+fn configure_hyprland_nvidia_webkit() {
+    let is_hyprland = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some()
+        || ["XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP"]
+            .iter()
+            .filter_map(|key| std::env::var(key).ok())
+            .any(|value| {
+                value
+                    .split([':', ';'])
+                    .any(|desktop| desktop.eq_ignore_ascii_case("hyprland"))
+            });
+    if !is_hyprland {
+        return;
+    }
+
+    let Ok(drm_entries) = std::fs::read_dir("/sys/class/drm") else {
+        return;
+    };
+    let mut drm_vendors = Vec::new();
+    for entry in drm_entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let is_card = name.strip_prefix("card").is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit())
+        });
+        if !is_card {
+            continue;
+        }
+        let Ok(vendor) = std::fs::read_to_string(entry.path().join("device/vendor")) else {
+            return;
+        };
+        drm_vendors.push(vendor);
+    }
+    let only_nvidia = !drm_vendors.is_empty()
+        && drm_vendors
+            .iter()
+            .all(|vendor| vendor.trim().eq_ignore_ascii_case("0x10de"));
+    if !only_nvidia {
+        return;
+    }
+
+    let user_selected_renderer = [
+        "WEBKIT_DMABUF_RENDERER_FORCE_SHM",
+        "WEBKIT_DISABLE_DMABUF_RENDERER",
+        "WEBKIT_DISABLE_COMPOSITING_MODE",
+    ]
+    .iter()
+    .any(|key| std::env::var_os(key).is_some());
+    if user_selected_renderer {
+        return;
+    }
+
+    std::env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1");
+    println!("[uyumluluk] Hyprland + NVIDIA için WebKit SHM taşıması etkinleştirildi");
+}
 
 /// İsteği sidecar'a gönderir ve yanıtı bekler. (Bloklama — async çağıranlar
 /// spawn_blocking kullanmalı.)
@@ -582,6 +645,9 @@ fn open_devtools_impl(_app: &tauri::AppHandle) {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    configure_hyprland_nvidia_webkit();
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
