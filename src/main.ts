@@ -12,7 +12,7 @@ import {
   type Region,
   type ViewMode,
 } from "./viewer";
-import { renderEditor, type EditorApi } from "./editor";
+import { disposeEditor, renderEditor, type EditorApi } from "./editor";
 
 /* ------------------------------------------------------------------ state */
 
@@ -93,6 +93,7 @@ const state = {
   provider: "mock",
   providers: [] as ProviderInfo[],
   running: false,
+  starting: false,
   cancelRequested: false,
   done: [] as DonePage[],
   failedCount: 0,
@@ -102,6 +103,7 @@ const state = {
   showBoxes: false,
   currentJob: "",
   editMode: false,
+  editorBusy: false,
   selectedRegionId: null as number | null,
   projects: [] as ProjectSummary[],
   activeProject: null as { id: string; name: string } | null,
@@ -110,11 +112,34 @@ const state = {
   savedAt: null as number | null,
   savedFlash: false,
   saveBusy: false,
+  projectsLoading: false,
+  projectsError: null as string | null,
+  openingProjectId: null as string | null,
+  deletingProjectId: null as string | null,
+  sourceBusy: false,
+  providerLoadError: false,
+  serviceReady: false,
 };
 
 /** Elle eklenen bölgeler için benzersiz id'ler (otomatik id'lerle çakışmaz). */
 let manualRegionSeq = 1000;
-const nextManualRegionId = (): number => ++manualRegionSeq;
+function syncManualRegionSeq(): void {
+  const maxExisting = state.done.reduce(
+    (maxId, page) =>
+      page.result.regions.reduce(
+        (pageMax, region) => Math.max(pageMax, Number.isFinite(region.id) ? region.id : 0),
+        maxId,
+      ),
+    1000,
+  );
+  manualRegionSeq = Math.max(1000, maxExisting);
+}
+
+function nextManualRegionId(): number {
+  // Aynı oturumda başka bir sayfa/proje yüklendiyse de mevcut id'lerin üstünden devam et.
+  syncManualRegionSeq();
+  return ++manualRegionSeq;
+}
 
 const PROVIDER_NAMES: Record<string, string> = {
   mock: "Mock (test)",
@@ -139,6 +164,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 const els = {
+  app: $<HTMLElement>("app"),
   header: $<HTMLElement>("app-header"),
   tabbar: $<HTMLElement>("app-tabbar"),
   editorNav: $<HTMLElement>("editor-nav"),
@@ -157,6 +183,7 @@ const els = {
   projectGrid: $<HTMLDivElement>("project-grid"),
   projectsEmpty: $<HTMLElement>("projects-empty"),
   btnNewProject: $<HTMLButtonElement>("btn-new-project"),
+  btnNewProjectEmpty: $<HTMLButtonElement>("btn-new-project-empty"),
   resultsCard: $<HTMLElement>("results-card"),
   resultsTitle: $<HTMLHeadingElement>("results-title"),
   newProjectModal: $<HTMLDivElement>("new-project-modal"),
@@ -169,6 +196,7 @@ const els = {
   confirmOk: $<HTMLButtonElement>("confirm-ok"),
   confirmCancel: $<HTMLButtonElement>("confirm-cancel"),
   exportModal: $<HTMLDivElement>("export-modal"),
+  exportStatus: $<HTMLParagraphElement>("export-status"),
   exportBackdrop: $<HTMLDivElement>("export-backdrop"),
   exportFolderBtn: $<HTMLButtonElement>("export-folder-btn"),
   exportFolderText: $<HTMLSpanElement>("export-folder-text"),
@@ -189,8 +217,10 @@ const els = {
   btnCancel: $<HTMLButtonElement>("btn-cancel"),
   progressCard: $<HTMLElement>("progress-card"),
   progressCount: $<HTMLSpanElement>("progress-count"),
+  overallBar: $<HTMLDivElement>("overall-bar"),
   overallFill: $<HTMLDivElement>("overall-fill"),
   overallHint: $<HTMLParagraphElement>("overall-hint"),
+  pageBar: $<HTMLDivElement>("page-bar"),
   pageFill: $<HTMLDivElement>("page-fill"),
   pagePct: $<HTMLSpanElement>("page-pct"),
   stageLabel: $<HTMLParagraphElement>("stage-label"),
@@ -233,8 +263,94 @@ async function request(cmd: string, payload?: unknown): Promise<unknown> {
 }
 
 function setBadge(kind: "ok" | "error" | "unknown", text: string): void {
+  state.serviceReady = kind === "ok";
   els.sidecarStatus.className = `badge ${kind}`;
   els.sidecarStatus.textContent = text;
+  syncConfigControls();
+}
+
+const modalReturnFocus = new WeakMap<HTMLElement, HTMLElement>();
+
+function visibleModal(): HTMLElement | null {
+  return [els.confirmModal, els.exportModal, els.newProjectModal].find(
+    (modal) => !modal.classList.contains("hidden"),
+  ) ?? null;
+}
+
+function showModal(modal: HTMLElement, initialFocus: HTMLElement): void {
+  const active = document.activeElement;
+  if (active instanceof HTMLElement) modalReturnFocus.set(modal, active);
+  modal.classList.remove("hidden");
+  modal.setAttribute("aria-hidden", "false");
+  els.app.setAttribute("inert", "");
+  document.documentElement.classList.add("modal-open");
+  document.body.classList.add("modal-open");
+  window.setTimeout(() => initialFocus.focus(), 0);
+}
+
+function hideModal(modal: HTMLElement): void {
+  modal.classList.add("hidden");
+  modal.setAttribute("aria-hidden", "true");
+  if (!visibleModal()) {
+    els.app.removeAttribute("inert");
+    document.documentElement.classList.remove("modal-open");
+    document.body.classList.remove("modal-open");
+  }
+
+  const returnTarget = modalReturnFocus.get(modal);
+  modalReturnFocus.delete(modal);
+  window.setTimeout(() => {
+    if (returnTarget?.isConnected && !returnTarget.closest(".hidden")) returnTarget.focus();
+  }, 0);
+}
+
+function trapModalFocus(ev: KeyboardEvent): void {
+  if (ev.key !== "Tab") return;
+  const modal = visibleModal();
+  if (!modal) return;
+  const focusable = Array.from(
+    modal.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+    ),
+  ).filter((node) => !node.closest(".hidden"));
+  if (!focusable.length) {
+    ev.preventDefault();
+    modal.focus({ preventScroll: true });
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  const active = document.activeElement;
+  if (!modal.contains(active)) {
+    ev.preventDefault();
+    first.focus();
+  } else if (ev.shiftKey && active === first) {
+    ev.preventDefault();
+    last.focus();
+  } else if (!ev.shiftKey && active === last) {
+    ev.preventDefault();
+    first.focus();
+  }
+}
+
+function enableRadioGroupKeyboard(group: HTMLElement): void {
+  group.addEventListener("keydown", (ev) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(ev.key)) return;
+    const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>('button[role="radio"]:not(:disabled)'));
+    if (!buttons.length) return;
+    const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (current < 0) return;
+    ev.preventDefault();
+    const backwards = ev.key === "ArrowLeft" || ev.key === "ArrowUp";
+    const next = ev.key === "Home"
+      ? 0
+      : ev.key === "End"
+        ? buttons.length - 1
+        : (current + (backwards ? -1 : 1) + buttons.length) % buttons.length;
+    buttons[next].focus();
+    buttons[next].click();
+  });
 }
 
 let bannerTimer: number | undefined;
@@ -257,6 +373,8 @@ function hideBanner(): void {
 /* ------------------------------------------------------------- sekme yönetimi */
 
 function setTab(tab: TabId): void {
+  if (state.editorBusy && tab !== "editor") return;
+  if (tab !== "editor") disposeEditor();
   state.tab = tab;
   // "editor" gizli bir durumdur: sekme çubuğunda karşılığı yoktur, yalnızca
   // programatik olarak (proje kartına tıklayarak) tetiklenir. Sekmelerden
@@ -267,8 +385,12 @@ function setTab(tab: TabId): void {
   els.tabAnime.classList.toggle("active", onAnime);
   els.tabMangas.setAttribute("aria-selected", String(onMangas));
   els.tabAnime.setAttribute("aria-selected", String(onAnime));
+  els.tabMangas.tabIndex = onMangas ? 0 : -1;
+  els.tabAnime.tabIndex = onAnime ? 0 : -1;
   els.mangasView.classList.toggle("hidden", !onMangas);
   els.animeView.classList.toggle("hidden", !onAnime);
+  els.mangasView.setAttribute("aria-hidden", String(!onMangas));
+  els.animeView.setAttribute("aria-hidden", String(!onAnime));
   els.editorView.classList.toggle("hidden", tab !== "editor");
   updateChrome();
   if (tab === "editor") {
@@ -321,10 +443,28 @@ async function loadCardSizePref(): Promise<void> {
 
 function renderSavedIndicator(): void {
   const base = "saved-indicator";
-  if (!state.activeProject || !state.savedAt) {
-    els.savedIndicator.textContent = "Kaydedilmedi";
+  if (state.activeProject && state.saveBusy) {
+    els.savedIndicator.textContent = "Kaydediliyor…";
+    els.savedIndicator.className = `${base} dim`;
+    els.savedIndicator.title = `${state.activeProject.name} kaydediliyor`;
+    return;
+  }
+  if (!state.activeProject) {
+    els.savedIndicator.textContent = "Proje açık değil";
     els.savedIndicator.className = `${base} dim`;
     els.savedIndicator.title = "Henüz bir proje açık değil";
+    return;
+  }
+  if (failedProjectSaves.has(state.activeProject.id)) {
+    els.savedIndicator.textContent = "Kaydedilemedi";
+    els.savedIndicator.className = `${base} error`;
+    els.savedIndicator.title = `${state.activeProject.name} için kaydedilmemiş değişiklikler var`;
+    return;
+  }
+  if (!state.savedAt) {
+    els.savedIndicator.textContent = "Henüz kaydedilmedi";
+    els.savedIndicator.className = `${base} dim`;
+    els.savedIndicator.title = `${state.activeProject.name} henüz kaydedilmedi`;
     return;
   }
   const time = new Date(state.savedAt).toLocaleTimeString("tr-TR");
@@ -333,25 +473,103 @@ function renderSavedIndicator(): void {
   els.savedIndicator.title = `Son kayıt: ${new Date(state.savedAt).toLocaleString("tr-TR")}`;
 }
 
-async function refreshProjects(): Promise<void> {
-  try {
-    state.projects = (await invoke("list_projects")) as ProjectSummary[];
-  } catch (err) {
-    showBanner(`Proje listesi alınamadı: ${String(err)}`, "error");
-    state.projects = [];
+type ProjectsEmptyState = "empty" | "loading" | "error";
+
+function setProjectsEmptyState(kind: ProjectsEmptyState): void {
+  const title = els.projectsEmpty.querySelector<HTMLElement>("h3");
+  const detail = els.projectsEmpty.querySelector<HTMLElement>(".hint");
+  const icon = els.projectsEmpty.querySelector<HTMLElement>(".projects-empty-icon");
+  const isEmpty = kind === "empty";
+
+  if (title) {
+    title.textContent =
+      kind === "loading"
+        ? "Projeler yükleniyor…"
+        : kind === "error"
+          ? "Projeler yüklenemedi"
+          : "İlk manga çevirinizi oluşturun";
   }
+  if (detail) {
+    detail.textContent =
+      kind === "loading"
+        ? "Bu bilgisayardaki proje kütüphanesi hazırlanıyor."
+        : kind === "error"
+          ? "Yeniden denemek için bu alana tıklayın veya Enter tuşuna basın."
+          : "Bir sayfa ya da manga klasörü seçin; PS Editor metinleri algılayıp temizlesin, çevirsin ve yeniden yerleştirsin.";
+  }
+  icon?.classList.toggle("hidden", !isEmpty);
+  els.btnNewProjectEmpty.classList.toggle("hidden", !isEmpty);
+
+  if (kind === "loading") {
+    els.projectsEmpty.setAttribute("role", "status");
+    els.projectsEmpty.removeAttribute("tabindex");
+  } else if (kind === "error") {
+    els.projectsEmpty.setAttribute("role", "button");
+    els.projectsEmpty.tabIndex = 0;
+  } else {
+    els.projectsEmpty.removeAttribute("role");
+    els.projectsEmpty.removeAttribute("tabindex");
+  }
+}
+
+let projectsRefreshQueued = false;
+let projectsRefreshLoop: Promise<void> | null = null;
+
+async function drainProjectRefreshes(): Promise<void> {
+  state.projectsLoading = true;
   renderProjects();
+  try {
+    while (projectsRefreshQueued) {
+      projectsRefreshQueued = false;
+      state.projectsError = null;
+      try {
+        state.projects = (await invoke("list_projects")) as ProjectSummary[];
+      } catch (err) {
+        state.projectsError = `Proje listesi alınamadı: ${String(err)}`;
+        showBanner(state.projectsError, "error");
+      }
+    }
+  } finally {
+    state.projectsLoading = false;
+    renderProjects();
+    projectsRefreshLoop = null;
+  }
+}
+
+/** Eşzamanlı yenileme isteklerini tek döngüde sıraya alır; son istek düşmez. */
+function refreshProjects(): Promise<void> {
+  projectsRefreshQueued = true;
+  if (!projectsRefreshLoop) projectsRefreshLoop = drainProjectRefreshes();
+  return projectsRefreshLoop;
 }
 
 function renderProjects(): void {
+  els.projectGrid.setAttribute("aria-busy", String(state.projectsLoading));
+  if (state.projectsLoading && state.projects.length === 0) {
+    els.projectGrid.replaceChildren();
+    setProjectsEmptyState("loading");
+    els.projectsEmpty.classList.remove("hidden");
+    return;
+  }
+
   els.projectGrid.replaceChildren();
+  const showLoadError = !!state.projectsError && state.projects.length === 0;
+  if (showLoadError) {
+    setProjectsEmptyState("error");
+  } else {
+    setProjectsEmptyState("empty");
+  }
   els.projectsEmpty.classList.toggle("hidden", state.projects.length > 0);
   for (const p of state.projects) {
-    const card = document.createElement("div");
+    const card = document.createElement("article");
     card.className = "project-card";
-    card.tabIndex = 0;
-    card.setAttribute("role", "button");
-    card.title = `${p.name} — aç`;
+    card.dataset.projectId = p.id;
+
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.className = "project-open";
+    openButton.title = `${p.name} — aç`;
+    openButton.setAttribute("aria-label", `${p.name} projesini aç`);
 
     let thumb: HTMLElement;
     if (p.thumb) {
@@ -362,20 +580,21 @@ function renderProjects(): void {
       img.loading = "lazy";
       thumb = img;
     } else {
-      thumb = document.createElement("div");
+      thumb = document.createElement("span");
       thumb.className = "project-thumb-placeholder";
       thumb.textContent = "Önizleme yok";
     }
 
-    const body = document.createElement("div");
+    const body = document.createElement("span");
     body.className = "project-card-body";
-    const name = document.createElement("p");
+    const name = document.createElement("span");
     name.className = "project-card-name";
     name.textContent = p.name;
     name.title = p.name;
-    const meta = document.createElement("p");
+    const meta = document.createElement("span");
     meta.className = "project-card-meta";
     meta.textContent = `${p.page_count} sayfa işlendi · son düzenleme ${fmtTime(p.updated_at)}`;
+    meta.dataset.defaultText = meta.textContent;
     body.append(name, meta);
 
     const del = document.createElement("button");
@@ -389,20 +608,47 @@ function renderProjects(): void {
       requestDeleteProject(p);
     });
 
-    card.append(thumb, body, del);
-    card.addEventListener("click", () => void openProject(p.id));
-    card.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") {
-        ev.preventDefault();
-        void openProject(p.id);
-      }
-    });
+    openButton.append(thumb, body);
+    openButton.addEventListener("click", () => void openProject(p.id));
+    card.append(openButton, del);
     els.projectGrid.appendChild(card);
+  }
+  syncProjectOpenState();
+}
+
+function syncProjectOpenState(): void {
+  const busyId = state.openingProjectId ?? state.deletingProjectId;
+  els.projectGrid.setAttribute("aria-busy", String(!!busyId || state.projectsLoading));
+  for (const card of els.projectGrid.querySelectorAll<HTMLElement>(".project-card")) {
+    const busy = !!busyId;
+    const isOpening = card.dataset.projectId === busyId;
+    card.setAttribute("aria-busy", String(isOpening));
+    card.classList.toggle("is-busy", busy);
+    const openButton = card.querySelector<HTMLButtonElement>(".project-open");
+    if (openButton) openButton.disabled = busy;
+    const del = card.querySelector<HTMLButtonElement>(".project-delete");
+    if (del) del.disabled = busy;
+    const meta = card.querySelector<HTMLElement>(".project-card-meta");
+    if (meta) {
+      meta.textContent = isOpening
+        ? state.deletingProjectId === busyId
+          ? "Proje siliniyor…"
+          : "Proje açılıyor…"
+        : meta.dataset.defaultText ?? "";
+    }
   }
 }
 
 async function openProject(id: string): Promise<void> {
+  if (state.openingProjectId || state.deletingProjectId || state.editorBusy) return;
+  state.openingProjectId = id;
+  syncProjectOpenState();
   try {
+    // Başka bir projeden kalan son düzenlemeler diske inmeden yeni manifesti okuma.
+    if (!(await flushProjectSaves())) {
+      showBanner("Kaydedilemeyen değişiklikler var; proje değiştirilmedi. Bağlantıyı kontrol edip yeniden deneyin.", "error");
+      return;
+    }
     const manifest = (await invoke("open_project", { projectId: id })) as ProjectManifest;
     state.activeProject = { id, name: manifest.name };
     state.manifestMeta = {
@@ -418,9 +664,12 @@ async function openProject(id: string): Promise<void> {
       result: pg.result,
       imgVer: 1,
     }));
+    state.failedCount = 0;
     state.selected = 0;
     state.editMode = false;
     state.selectedRegionId = null;
+    syncManualRegionSeq();
+    syncEditControls();
     const t = Date.parse(manifest.updated_at);
     state.savedAt = Number.isFinite(t) ? t : Date.now();
     state.savedFlash = false;
@@ -432,6 +681,9 @@ async function openProject(id: string): Promise<void> {
     setTab("editor");
   } catch (err) {
     showBanner(`Proje açılamadı: ${String(err)}`, "error");
+  } finally {
+    state.openingProjectId = null;
+    syncProjectOpenState();
   }
 }
 
@@ -453,18 +705,25 @@ function confirmDialog(title: string, message: string, okLabel: string, onOk: ()
   els.confirmTitle.textContent = title;
   els.confirmMessage.textContent = message;
   els.confirmOk.textContent = okLabel;
-  els.confirmModal.classList.remove("hidden");
-  els.confirmModal.setAttribute("aria-hidden", "false");
+  showModal(els.confirmModal, els.confirmCancel);
 }
 
 function closeConfirm(): void {
   confirmCallback = null;
-  els.confirmModal.classList.add("hidden");
-  els.confirmModal.setAttribute("aria-hidden", "true");
+  hideModal(els.confirmModal);
 }
 
 async function deleteProject(p: ProjectSummary): Promise<void> {
+  if (state.openingProjectId || state.deletingProjectId) return;
+  state.deletingProjectId = p.id;
+  syncProjectOpenState();
   try {
+    // Silinecek projeye ait kuyruktaki bir kayıt işleminin sonradan dosyayı geri
+    // oluşturmasını engellemek için önce mevcut kayıtları tamamla.
+    if (!(await flushProjectSaves())) {
+      showBanner("Kaydedilemeyen değişiklikler varken proje silinmedi. Yeniden deneyin.", "error");
+      return;
+    }
     await invoke("delete_project", { projectId: p.id });
     if (state.activeProject?.id === p.id) {
       state.activeProject = null;
@@ -479,28 +738,31 @@ async function deleteProject(p: ProjectSummary): Promise<void> {
     await refreshProjects();
   } catch (err) {
     showBanner(`Proje silinemedi: ${String(err)}`, "error");
+  } finally {
+    state.deletingProjectId = null;
+    syncProjectOpenState();
   }
 }
 
 /* ------------------------------------------------- "Yeni çeviri ekle" modalı */
 
 function openNewProjectModal(): void {
+  if (state.editorBusy) return;
   state.pages = [];
   state.sourcePath = null;
+  state.sourceBusy = false;
   els.sourceInfo.textContent = "";
+  els.sourceInfo.setAttribute("aria-busy", "false");
   els.sourceInfo.classList.add("hidden");
   els.progressCard.classList.add("hidden");
   els.projectName.value = "";
-  els.btnStart.disabled = true;
-  els.newProjectModal.classList.remove("hidden");
-  els.newProjectModal.setAttribute("aria-hidden", "false");
-  window.setTimeout(() => els.btnPickFile.focus(), 0);
+  syncConfigControls();
+  showModal(els.newProjectModal, els.btnPickFile);
 }
 
 function closeNewProjectModal(): void {
-  if (state.running) return; // İşlem sürerken kapatılamaz.
-  els.newProjectModal.classList.add("hidden");
-  els.newProjectModal.setAttribute("aria-hidden", "true");
+  if (state.running || state.starting || state.sourceBusy) return; // İşlem/tarama sürerken kapatılamaz.
+  hideModal(els.newProjectModal);
 }
 
 function defaultProjectName(): string {
@@ -513,39 +775,81 @@ function defaultProjectName(): string {
 /* -------------------------------------------------------- kaynak seçimi */
 
 async function pickFile(): Promise<void> {
-  const file = await open({
-    multiple: false,
-    title: "Manga sayfası seçin",
-    filters: [{ name: "Görseller", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
-  });
-  if (!file) return;
-  const path = Array.isArray(file) ? file[0] : file;
-  state.pages = [path];
-  state.sourcePath = path;
-  state.sourceType = "file";
-  state.sourceLabel = `Tek sayfa · ${basename(path)}`;
-  showSourceInfo();
+  if (state.running || state.sourceBusy) return;
+  try {
+    const file = await open({
+      multiple: false,
+      title: "Manga sayfası seçin",
+      filters: [{ name: "Görseller", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+    });
+    if (!file) return;
+    const path = Array.isArray(file) ? file[0] : file;
+    state.pages = [path];
+    state.sourcePath = path;
+    state.sourceType = "file";
+    state.sourceLabel = `Tek sayfa · ${basename(path)}`;
+    showSourceInfo();
+  } catch (err) {
+    const message = `Dosya seçilemedi: ${String(err)}`;
+    showBanner(message, "error");
+    showSourceError(message);
+  }
 }
 
 async function pickFolder(): Promise<void> {
-  const dir = await open({ directory: true, multiple: false, title: "Sayfaları içeren klasörü seçin" });
-  if (!dir) return;
-  const folder = Array.isArray(dir) ? dir[0] : dir;
-  const images = (await invoke("list_images", { dir: folder })) as string[];
-  if (!images.length) {
-    showBanner("Seçilen klasörde görsel bulunamadı (PNG/JPG/WebP/BMP/GIF).", "warn");
+  if (state.running || state.sourceBusy) return;
+  try {
+    const dir = await open({ directory: true, multiple: false, title: "Sayfaları içeren klasörü seçin" });
+    if (!dir) return;
+    const folder = Array.isArray(dir) ? dir[0] : dir;
+    state.pages = [];
+    state.sourcePath = folder;
+    state.sourceType = "folder";
+    state.sourceLabel = "";
+    setSourceBusy(true);
+    els.sourceInfo.textContent = "Klasör taranıyor…";
+    els.sourceInfo.classList.remove("hidden");
+    const images = (await invoke("list_images", { dir: folder })) as string[];
+    if (!images.length) {
+      const message = "Seçilen klasörde görsel bulunamadı (PNG/JPG/WebP/BMP/GIF).";
+      showBanner(message, "warn");
+      state.pages = [];
+      state.sourcePath = folder;
+      state.sourceType = "folder";
+      state.sourceLabel = `0 sayfa · ${folder}`;
+      showSourceError(message);
+      return;
+    }
+    state.pages = images;
+    state.sourcePath = folder;
+    state.sourceType = "folder";
+    state.sourceLabel = `${images.length} sayfa · ${folder}`;
+    showSourceInfo();
+  } catch (err) {
+    const message = `Klasör okunamadı: ${String(err)}`;
+    showBanner(message, "error");
+    showSourceError(message);
+  } finally {
+    setSourceBusy(false);
   }
-  state.pages = images;
-  state.sourcePath = folder;
-  state.sourceType = "folder";
-  state.sourceLabel = `${images.length} sayfa · ${folder}`;
-  showSourceInfo();
 }
 
 function showSourceInfo(): void {
   els.sourceInfo.textContent = state.sourceLabel;
   els.sourceInfo.classList.remove("hidden");
-  els.btnStart.disabled = !state.pages.length || state.running;
+  syncConfigControls();
+}
+
+function showSourceError(message: string): void {
+  els.sourceInfo.textContent = message;
+  els.sourceInfo.classList.remove("hidden");
+  syncConfigControls();
+}
+
+function setSourceBusy(busy: boolean): void {
+  state.sourceBusy = busy;
+  els.sourceInfo.setAttribute("aria-busy", String(busy));
+  syncConfigControls();
 }
 
 /* ---------------------------------------------------------------- modlar */
@@ -556,11 +860,11 @@ function setMode(mode: Mode): void {
     const active = btn.dataset.mode === mode;
     btn.classList.toggle("active", active);
     btn.setAttribute("aria-checked", String(active));
+    btn.tabIndex = active ? 0 : -1;
   }
   els.modeHint.textContent = MODE_HINTS[mode];
-  els.providerSelect.disabled = state.running || mode === "local";
-  els.providerField.classList.toggle("dim", mode === "local");
   syncProviderDefault();
+  syncConfigControls();
 }
 
 function syncProviderDefault(): void {
@@ -577,8 +881,13 @@ function syncProviderDefault(): void {
 async function loadProviders(): Promise<void> {
   try {
     const res = (await request("list_providers", {})) as { providers: ProviderInfo[] };
+    if (!Array.isArray(res.providers) || res.providers.length === 0) {
+      throw new Error("Sağlayıcı listesi boş döndü");
+    }
     state.providers = res.providers;
+    state.providerLoadError = false;
   } catch {
+    state.providerLoadError = true;
     state.providers = [
       { name: "mock", needs_key: false, has_key: false },
       { name: "local", needs_key: false, has_key: false },
@@ -608,30 +917,45 @@ function renderProviderSelect(): void {
 function updateProviderHint(): void {
   const sel = els.providerSelect;
   const info = state.providers.find((p) => p.name === sel.value);
+  const loadWarning = state.providerLoadError
+    ? "Sağlayıcı durumu alınamadı; varsayılan liste gösteriliyor. "
+    : "";
   if (!info) {
-    els.providerHint.textContent = "";
+    els.providerHint.textContent = loadWarning.trim();
+    els.providerHint.classList.toggle("warn-text", !!loadWarning);
     return;
   }
+  const shouldWarn = state.providerLoadError || info.name === "mock" || (info.needs_key && !info.has_key);
+  els.providerHint.classList.toggle("warn-text", shouldWarn);
   if (state.mode === "local") {
-    els.providerHint.textContent = "Yerel modda sağlayıcı seçimi geçersiz; Ollama kullanılır.";
+    els.providerHint.textContent = `${loadWarning}Yerel modda sağlayıcı seçimi geçersiz; Ollama kullanılır.`;
   } else if (info.needs_key && !info.has_key) {
     els.providerHint.textContent =
-      "Sistemde kayıtlı API anahtarı yok; pipeline test mock çevirisine düşer.";
+      `${loadWarning}Bu sağlayıcı için API anahtarı yok. Gerçek çeviri başlatılamaz.`;
   } else if (info.needs_key) {
-    els.providerHint.textContent = "API anahtarı sistemde kayıtlı (güvenli depo).";
+    els.providerHint.textContent = `${loadWarning}API anahtarı sistemde kayıtlı (güvenli depo).`;
+  } else if (info.name === "mock") {
+    els.providerHint.textContent = `${loadWarning}Test modu: çıktı akışı denenir, gerçek çeviri yapılmaz.`;
   } else {
-    els.providerHint.textContent = "";
+    els.providerHint.textContent = loadWarning.trim();
   }
 }
 
 /* ----------------------------------------------------------- ilerleme UI */
 
 function setPageProgress(progress: number, label: string, detail: string): void {
-  const pct = Math.round(progress * 100);
+  const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
   els.pageFill.style.width = `${pct}%`;
   els.pagePct.textContent = `%${pct}`;
+  els.pageBar.setAttribute("aria-valuenow", String(pct));
   els.stageLabel.textContent = label;
   els.stageDetail.textContent = detail;
+}
+
+function setOverallProgress(progress: number): void {
+  const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
+  els.overallFill.style.width = `${pct}%`;
+  els.overallBar.setAttribute("aria-valuenow", String(pct));
 }
 
 function onProgress(p: ProgressPayload): void {
@@ -641,41 +965,75 @@ function onProgress(p: ProgressPayload): void {
   setPageProgress(progress, stageLabel(p.name), p.message ?? "");
 
   const total = state.pages.length || 1;
-  const overall = (state.done.length + Math.min(1, progress)) / total;
-  els.overallFill.style.width = `${Math.min(100, overall * 100)}%`;
-  els.progressCount.textContent = `${state.done.length}${state.cancelRequested ? "" : " / " + total} sayfa`;
+  const completed = state.done.length + state.failedCount;
+  const overall = (completed + Math.min(1, progress)) / total;
+  setOverallProgress(overall);
+  els.progressCount.textContent = `${completed}${state.cancelRequested ? "" : " / " + total} sayfa işlendi`;
 }
 
 /* ------------------------------------------------------------ ana akış */
 
+function syncConfigControls(): void {
+  const settingsBusy = state.running || state.starting;
+  const configBusy = settingsBusy || state.sourceBusy;
+  const providerInfo = state.providers.find((provider) => provider.name === state.provider);
+  const missingKey = state.mode !== "local" && !!providerInfo?.needs_key && !providerInfo.has_key;
+  els.btnStart.disabled = configBusy || !state.pages.length || !state.serviceReady || missingKey;
+  els.btnStart.textContent = state.starting ? "Hazırlanıyor…" : "İşlemeyi başlat";
+  els.btnStart.title = !state.serviceReady
+    ? "Çeviri altyapısı henüz hazır değil"
+    : missingKey
+      ? "Seçilen sağlayıcı için API anahtarı gerekli"
+      : "";
+  els.btnPickFile.disabled = configBusy;
+  els.btnPickFolder.disabled = configBusy;
+  els.langSelect.disabled = settingsBusy;
+  els.modalClose.disabled = configBusy;
+  els.projectName.disabled = settingsBusy;
+  els.providerSelect.disabled = settingsBusy || state.mode === "local";
+  els.providerField.classList.toggle("dim", settingsBusy || state.mode === "local");
+  els.providerField.setAttribute("aria-disabled", String(settingsBusy || state.mode === "local"));
+  els.modeGroup.setAttribute("aria-disabled", String(settingsBusy));
+  for (const btn of els.modeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
+    btn.disabled = settingsBusy;
+  }
+}
+
 function setRunning(running: boolean): void {
   state.running = running;
-  els.btnStart.disabled = running || !state.pages.length;
-  els.btnPickFile.disabled = running;
-  els.btnPickFolder.disabled = running;
-  els.langSelect.disabled = running;
-  els.modalClose.disabled = running;
-  els.projectName.disabled = running;
-  for (const btn of els.modeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
-    btn.disabled = running;
-  }
+  syncConfigControls();
   els.btnCancel.classList.toggle("hidden", !running);
   els.btnCancel.disabled = !running;
+  els.btnCancel.textContent = "İptal";
+  els.progressCard.setAttribute("aria-busy", String(running));
 }
 
 async function run(): Promise<void> {
-  const pages = state.pages;
-  if (!pages.length || state.running) return;
+  const pages = [...state.pages];
+  if (!pages.length || state.running || state.starting) return;
+  state.starting = true;
+  syncConfigControls();
+  if (!(await flushProjectSaves())) {
+    state.starting = false;
+    showBanner("Önceki projedeki değişiklikler kaydedilemedi; yeni proje başlatılmadı.", "error");
+    syncConfigControls();
+    return;
+  }
 
   state.done = [];
   state.failedCount = 0;
   state.selected = 0;
   state.cancelRequested = false;
+  state.editMode = false;
+  state.selectedRegionId = null;
+  manualRegionSeq = 1000;
+  syncEditControls();
   hideBanner();
+  state.starting = false;
   setRunning(true);
   els.progressCard.classList.remove("hidden");
   els.resultsCard.classList.add("hidden");
-  els.overallFill.style.width = "0%";
+  setOverallProgress(0);
   setPageProgress(0, stageLabel("started"), "Hazırlanıyor…");
 
   const lang = els.langSelect.value;
@@ -696,8 +1054,10 @@ async function run(): Promise<void> {
     projectId = created.id;
   } catch (err) {
     setRunning(false);
-    els.progressCard.classList.add("hidden");
-    showBanner(`Proje oluşturulamadı: ${String(err)}`, "error");
+    const message = `Proje oluşturulamadı: ${String(err)}`;
+    setPageProgress(0, "İşlem başlatılamadı", message);
+    els.overallHint.textContent = "Ayarları kontrol edip yeniden deneyin.";
+    showBanner(message, "error");
     return;
   }
   state.activeProject = { id: projectId, name };
@@ -742,11 +1102,14 @@ async function run(): Promise<void> {
       })) as AddedPage;
       state.done.push({ name: added.name, input: added.source, result: added.result, imgVer: 1 });
       if (state.running && !state.cancelRequested) {
-        els.overallFill.style.width = `${(state.done.length / pages.length) * 100}%`;
-        els.progressCount.textContent = `${state.done.length}/${pages.length} sayfa`;
+        const completed = state.done.length + state.failedCount;
+        setOverallProgress(completed / pages.length);
+        els.progressCount.textContent = `${completed}/${pages.length} sayfa işlendi`;
       }
     } catch (err) {
       state.failedCount++;
+      setOverallProgress((state.done.length + state.failedCount) / pages.length);
+      els.progressCount.textContent = `${state.done.length + state.failedCount} / ${pages.length} sayfa işlendi`;
       showBanner(`"${pageName}" işlenemedi: ${String(err)}`, "error");
     }
   }
@@ -755,6 +1118,7 @@ async function run(): Promise<void> {
   els.progressCard.classList.add("hidden");
 
   if (state.done.length) {
+    syncManualRegionSeq();
     state.savedAt = Date.now();
     state.savedFlash = false;
     renderSavedIndicator();
@@ -820,13 +1184,19 @@ function renderThumbs(): void {
     thumb.type = "button";
     thumb.className = "thumb" + (idx === state.selected ? " active" : "");
     thumb.title = `${item.name} · ${item.result.provider?.name ?? ""}`;
+    thumb.disabled = state.editorBusy;
+    if (idx === state.selected) thumb.setAttribute("aria-current", "page");
     const img = document.createElement("img");
     img.src = pageImageUrl(item.result.outputs.translated, item.imgVer);
     img.alt = `Sayfa ${idx + 1}`;
     thumb.appendChild(img);
     thumb.addEventListener("click", () => {
-      state.selected = idx;
-      renderSelected();
+      if (idx === state.selected) return;
+      withEditorDraftGuard(() => {
+        state.selected = idx;
+        state.selectedRegionId = null;
+        renderSelected();
+      });
     });
     els.thumbs.appendChild(thumb);
   });
@@ -844,17 +1214,14 @@ function renderSelected(): void {
   if (state.editMode) {
     renderEditor(els.viewer, r, state.selectedRegionId, item.imgVer, editorApi());
   } else {
+    disposeEditor();
     renderViewer(els.viewer, r, {
       mode: state.viewMode,
       showBoxes: state.showBoxes,
       ver: item.imgVer,
       onSelect: (region) => {
-        state.editMode = true;
         state.selectedRegionId = region.id;
-        els.btnEdit.classList.add("active");
-        els.btnEdit.textContent = "Düzenle (açık)";
-        updateChrome();
-        renderSelected();
+        setEditMode(true);
       },
     });
   }
@@ -871,7 +1238,13 @@ function renderSelected(): void {
 
   Array.from(els.thumbs.children).forEach((btn, idx) => {
     btn.classList.toggle("active", idx === state.selected);
+    if (idx === state.selected) {
+      btn.setAttribute("aria-current", "page");
+    } else {
+      btn.removeAttribute("aria-current");
+    }
   });
+  syncEditControls();
 }
 
 /** Editör görünümündeyken üst chrome (logo, durum yazıları, sekmeler)
@@ -882,74 +1255,246 @@ function updateChrome(): void {
   els.tabbar.classList.toggle("hidden", hide);
 }
 
-function setEditMode(on: boolean): void {
-  state.editMode = on;
-  els.btnEdit.classList.toggle("active", on);
-  els.btnEdit.textContent = on ? "Düzenle (açık)" : "Düzenle";
-  updateChrome();
-  if (on) {
+function hasPendingEditorDraft(): boolean {
+  if (!state.editMode) return false;
+  const selectedRegion = selectedItem()?.result.regions.find((region) => region.id === state.selectedRegionId);
+  const uncommittedManualRegion = !!selectedRegion?.manual && selectedRegion.committed === false;
+  return (
+    uncommittedManualRegion ||
+    !!els.viewer.querySelector(".dirty-hint:not(.hidden), .reg-box.dirty")
+  );
+}
+
+function discardUncommittedManualRegion(): void {
+  const item = selectedItem();
+  if (!item || state.selectedRegionId == null) return;
+  const region = item.result.regions.find((candidate) => candidate.id === state.selectedRegionId);
+  if (!region?.manual || region.committed !== false) return;
+  item.result.regions = item.result.regions.filter((candidate) => candidate.id !== region.id);
+  state.selectedRegionId = null;
+  refreshOverflowWarning();
+  void saveProject();
+}
+
+/** Editör taslağı yerel olduğu için yeniden render edecek eylemleri kullanıcıya bildirir. */
+function withEditorDraftGuard(action: () => void): void {
+  if (state.editorBusy) {
+    showBanner("Bölge işlemi tamamlanırken görünüm değiştirilemez.", "warn");
     return;
   }
-  state.selectedRegionId = null;
+  if (!hasPendingEditorDraft()) {
+    action();
+    return;
+  }
+  confirmDialog(
+    "Uygulanmamış değişiklikler",
+    "Bu bölgedeki değişiklikler henüz uygulanmadı. Devam ederseniz son değişiklikler kaybolacak.",
+    "Değişiklikleri At",
+    () => {
+      discardUncommittedManualRegion();
+      action();
+    },
+  );
+}
+
+function syncEditControls(): void {
+  els.btnEdit.classList.toggle("active", state.editMode);
+  els.btnEdit.textContent = state.editMode ? "Düzenlemeyi bitir" : "Düzenle";
+  els.btnEdit.title = state.editMode ? "Sonuç görünümüne dön" : "Metin bölgelerini düzenle";
+  els.btnEdit.setAttribute("aria-pressed", String(state.editMode));
+  els.btnEdit.disabled = state.editorBusy;
+  els.btnBackMangas.disabled = state.editorBusy;
+
+  els.btnExport.disabled = state.editMode || state.editorBusy;
+  els.btnExport.setAttribute("aria-disabled", String(state.editMode || state.editorBusy));
+  els.btnExport.title = state.editMode ? "Dışa aktarmadan önce düzenlemeyi bitirin" : "Çıktıları dışa aktar";
+  els.resultsCard.setAttribute("aria-busy", String(state.editorBusy));
+  for (const thumb of els.thumbs.querySelectorAll<HTMLButtonElement>("button.thumb")) {
+    thumb.disabled = state.editorBusy;
+  }
+
+  els.btnOverflow.classList.toggle("active", state.showBoxes);
+  els.btnOverflow.setAttribute("aria-pressed", String(state.showBoxes));
+  els.btnOverflow.disabled = state.editMode;
+  els.btnOverflow.setAttribute("aria-disabled", String(state.editMode));
+
+  els.viewModeGroup.setAttribute("aria-disabled", String(state.editMode));
+  for (const btn of els.viewModeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
+    const active = btn.dataset.view === state.viewMode;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-checked", String(active));
+    btn.tabIndex = active ? 0 : -1;
+    btn.disabled = state.editMode;
+  }
+}
+
+function setEditMode(on: boolean): void {
+  if (state.editorBusy) return;
+  if (state.editMode === on) {
+    syncEditControls();
+    // İlk açılışta durum değişmiş olsa da görünüm henüz editöre dönmemiş olabilir.
+    if (on && !els.viewer.querySelector(".editor-wrap")) renderSelected();
+    return;
+  }
+  state.editMode = on;
+  if (!on) state.selectedRegionId = null;
+  syncEditControls();
+  updateChrome();
   renderSelected();
 }
 
 /* ------------------------------------------------- Autosave (proje manifesti) */
 
-/** Bellekteki manifesti diske yazar; "Kaydedildi" göstergesini tazeler.
- *  Debounce gerekmez: yalnızca net eylem anlarında çağrılır (Uygula /
- *  Devre Dışı Bırak / Sil / yeni bölge). */
-async function saveProject(): Promise<void> {
-  if (!state.activeProject || !state.manifestMeta) return;
-  if (state.saveBusy) return;
-  state.saveBusy = true;
+interface PendingProjectSave {
+  projectId: string;
+  projectName: string;
+  manifest: ProjectManifest;
+}
+
+const pendingProjectSaves = new Map<string, PendingProjectSave>();
+const failedProjectSaves = new Map<string, PendingProjectSave>();
+let saveLoop: Promise<void> | null = null;
+
+async function drainProjectSaves(): Promise<void> {
+  let savedAny = false;
   try {
-    const manifest: ProjectManifest = {
-      ...state.manifestMeta,
-      updated_at: new Date().toISOString(),
-      pages: state.done.map((d, i) => ({
-        index: i,
-        name: d.name,
-        source: d.input,
-        result: d.result,
-      })),
-    };
-    await invoke("save_project", { projectId: state.activeProject.id, manifest });
-    state.savedAt = Date.now();
-    state.savedFlash = true;
-    renderSavedIndicator();
-    void refreshProjects();
-  } catch (err) {
-    showBanner(`Kaydedilemedi: ${String(err)}`, "error");
+    while (pendingProjectSaves.size) {
+      const next = pendingProjectSaves.entries().next().value as
+        | [string, PendingProjectSave]
+        | undefined;
+      if (!next) break;
+      const [projectId, job] = next;
+      pendingProjectSaves.delete(projectId);
+      try {
+        await invoke("save_project", { projectId: job.projectId, manifest: job.manifest });
+        failedProjectSaves.delete(job.projectId);
+        savedAny = true;
+        if (state.activeProject?.id === job.projectId) {
+          state.savedAt = Date.parse(job.manifest.updated_at) || Date.now();
+          state.savedFlash = true;
+        }
+      } catch (err) {
+        // Anlık görüntüyü bellekte tut; kullanıcı yeniden denerse aynı proje
+        // verisini kaybetmeden tekrar yazmayı dene.
+        failedProjectSaves.set(job.projectId, job);
+        showBanner(`"${job.projectName}" kaydedilemedi: ${String(err)}`, "error");
+      }
+    }
   } finally {
+    if (savedAny) void refreshProjects();
+    saveLoop = null;
     state.saveBusy = false;
+    renderSavedIndicator();
   }
+}
+
+function ensureSaveLoop(): Promise<void> {
+  if (saveLoop) return saveLoop;
+  state.saveBusy = true;
+  renderSavedIndicator();
+  saveLoop = drainProjectSaves();
+  return saveLoop;
+}
+
+function queueProjectSave(
+  project: { id: string; name: string },
+  meta: ManifestMeta,
+  pages: DonePage[],
+): Promise<void> {
+  const manifest: ProjectManifest = {
+    ...meta,
+    updated_at: new Date().toISOString(),
+    pages: pages.map((d, i) => ({
+      index: i,
+      name: d.name,
+      source: d.input,
+      result: structuredClone(d.result),
+    })),
+  };
+  pendingProjectSaves.set(project.id, {
+    projectId: project.id,
+    projectName: project.name,
+    manifest,
+  });
+  return ensureSaveLoop();
+}
+
+/** Her proje için en güncel anlık görüntüyü kuyruğa alır. Proje değişse bile
+ * önceki projenin son düzenlemesi yanlış manifest üzerine yazılmaz. */
+function saveProject(): Promise<void> {
+  if (!state.activeProject || !state.manifestMeta) return Promise.resolve();
+  return queueProjectSave(state.activeProject, state.manifestMeta, state.done);
+}
+
+/** Bekleyen ve daha önce başarısız olmuş kayıtları bir kez daha dener. */
+async function flushProjectSaves(): Promise<boolean> {
+  if (saveLoop) await saveLoop;
+  if (failedProjectSaves.size) {
+    for (const [projectId, job] of failedProjectSaves) {
+      pendingProjectSaves.set(projectId, job);
+    }
+    await ensureSaveLoop();
+  } else if (pendingProjectSaves.size) {
+    await ensureSaveLoop();
+  }
+  return pendingProjectSaves.size === 0 && failedProjectSaves.size === 0;
 }
 
 /* -------------------------------------------------------- bölge düzenleme */
 
+let editorOperationOwner: object | null = null;
+
+function setEditorBusy(busy: boolean, owner: object): void {
+  if (busy) {
+    editorOperationOwner = owner;
+    state.editorBusy = true;
+  } else {
+    if (editorOperationOwner !== owner) return;
+    editorOperationOwner = null;
+    state.editorBusy = false;
+  }
+  syncEditControls();
+}
+
 /** Düzenleme sonrası önbellek tazeler ve görünümü yeniden kurar. */
-function afterRegionEdit(): void {
-  const item = selectedItem();
-  if (!item) return;
+function afterRegionEdit(item: DonePage, pageIndex: number, projectId: string | null): void {
   item.imgVer++;
+  if (!projectId || state.activeProject?.id !== projectId || state.done[pageIndex] !== item) return;
   refreshOverflowWarning();
-  const thumb = els.thumbs.children[state.selected]?.querySelector("img");
+  const thumb = els.thumbs.children[pageIndex]?.querySelector("img");
   if (thumb) {
     thumb.src = pageImageUrl(item.result.outputs.translated, item.imgVer);
   }
-  renderSelected();
+  if (state.selected === pageIndex) renderSelected();
 }
 
 function editorApi(): EditorApi {
+  const project = state.activeProject ? { ...state.activeProject } : null;
+  const meta = state.manifestMeta ? structuredClone(state.manifestMeta) : null;
+  const pages = state.done;
+  const pageIndex = state.selected;
+  const item = pages[pageIndex] ?? null;
+  const operationOwner = {};
+  const contextIsActive = (): boolean =>
+    !!project && state.activeProject?.id === project.id && state.done === pages && state.selected === pageIndex;
+  const persistContext = (): Promise<void> =>
+    project && meta ? queueProjectSave(project, meta, pages) : Promise.resolve();
+
   return {
+    onBusyChange(busy) {
+      if (busy && !contextIsActive()) return;
+      setEditorBusy(busy, operationOwner);
+    },
     onSelect(id) {
-      state.selectedRegionId = id;
-      renderSelected();
+      if (!contextIsActive()) return;
+      if (id === state.selectedRegionId) return;
+      withEditorDraftGuard(() => {
+        state.selectedRegionId = id;
+        renderSelected();
+      });
     },
     onCreateRegion(bbox) {
-      const item = selectedItem();
-      if (!item) return;
+      if (!item || !contextIsActive()) return;
       const region: Region = {
         id: nextManualRegionId(),
         index: -1,
@@ -968,10 +1513,9 @@ function editorApi(): EditorApi {
       state.selectedRegionId = region.id;
       refreshOverflowWarning();
       renderSelected();
-      void saveProject(); // autosave: yeni bölge anında kalıcı olur
+      void persistContext(); // autosave: yeni bölge anında kalıcı olur
     },
     async onApply(draft) {
-      const item = selectedItem();
       if (!item) return;
       const r = item.result;
       const cur = r.regions.find((x) => x.id === draft.id);
@@ -1008,11 +1552,10 @@ function editorApi(): EditorApi {
       // Devre dışı bırakılsa bile metni koru (tekrar etkinleştirmek için).
       if (!draft.disabled) cur.translation = draft.translation;
       cur.style = { ...REGION_STYLE_DEFAULTS, ...(res.style_used ?? draft.style) };
-      afterRegionEdit();
-      void saveProject(); // autosave: Uygula anında diske yazılır
+      afterRegionEdit(item, pageIndex, project?.id ?? null);
+      void persistContext(); // autosave: Uygula anında diske yazılır
     },
     async onDisable(region) {
-      const item = selectedItem();
       if (!item) return;
       const r = item.result;
       const cur = r.regions.find((x) => x.id === region.id);
@@ -1031,11 +1574,10 @@ function editorApi(): EditorApi {
       }
       cur.disabled = true;
       cur.overflow = false;
-      afterRegionEdit();
-      void saveProject();
+      afterRegionEdit(item, pageIndex, project?.id ?? null);
+      void persistContext();
     },
     async onDelete(region) {
-      const item = selectedItem();
       if (!item) return;
       const r = item.result;
       if (region.committed) {
@@ -1051,10 +1593,9 @@ function editorApi(): EditorApi {
         });
       }
       r.regions = r.regions.filter((x) => x.id !== region.id);
-      if (state.selectedRegionId === region.id) state.selectedRegionId = null;
-      refreshOverflowWarning();
-      renderSelected();
-      void saveProject();
+      if (contextIsActive() && state.selectedRegionId === region.id) state.selectedRegionId = null;
+      afterRegionEdit(item, pageIndex, project?.id ?? null);
+      void persistContext();
     },
   };
 }
@@ -1095,27 +1636,50 @@ function setExportFormat(fmt: ExportFormat): void {
     const active = btn.dataset.fmt === fmt;
     btn.classList.toggle("active", active);
     btn.setAttribute("aria-checked", String(active));
+    btn.tabIndex = active ? 0 : -1;
   }
+  els.exportFormatHint.removeAttribute("role");
   els.exportFormatHint.textContent = EXPORT_FORMAT_HINTS[fmt];
+}
+
+function showExportError(message: string): void {
+  els.exportFormatHint.textContent = message;
+  els.exportFormatHint.setAttribute("role", "alert");
+  showBanner(message, "error");
 }
 
 function updateExportUi(): void {
   els.exportFolderText.textContent = exportDir ?? "Seçilmedi";
   els.exportConfirm.disabled = !exportDir || exportBusy;
   els.exportFolderBtn.disabled = exportBusy;
+  els.exportCancel.disabled = exportBusy;
+  els.exportFormatGroup.setAttribute("aria-disabled", String(exportBusy));
+  for (const btn of els.exportFormatGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
+    btn.disabled = exportBusy;
+  }
+  els.exportModal.setAttribute("aria-busy", String(exportBusy));
+  els.exportStatus.textContent = exportBusy ? "Dosyalar dışa aktarılıyor. Lütfen bekleyin…" : "";
+  els.exportStatus.classList.toggle("hidden", !exportBusy);
+  if (exportBusy && !els.exportModal.classList.contains("hidden")) {
+    els.exportModal.focus({ preventScroll: true });
+  }
 }
 
 async function openExportModal(): Promise<void> {
+  if (state.editMode || state.editorBusy) {
+    showBanner("Dışa aktarmadan önce bölge düzenlemesini bitirin.", "warn");
+    return;
+  }
   if (!state.done.length) return;
   setExportFormat(exportFmt);
   updateExportUi();
-  els.exportModal.classList.remove("hidden");
-  els.exportModal.setAttribute("aria-hidden", "false");
+  showModal(els.exportModal, els.exportFolderBtn);
   // Son kullanılan klasörü tercihlerden yükle (bu oturumda seçim yapılmadıysa).
   if (!exportDir) {
     try {
       const v = (await invoke("load_pref", { key: EXPORT_DIR_PREF_KEY })) as unknown;
-      if (typeof v === "string" && v) {
+      // Kullanıcı tercih okunurken yeni bir klasör seçtiyse yeni seçimi ezme.
+      if (!exportDir && typeof v === "string" && v) {
         exportDir = v;
         updateExportUi();
       }
@@ -1127,17 +1691,21 @@ async function openExportModal(): Promise<void> {
 
 function closeExportModal(): void {
   if (exportBusy) return; // aktarım sürerken kapatılamaz
-  els.exportModal.classList.add("hidden");
-  els.exportModal.setAttribute("aria-hidden", "true");
+  hideModal(els.exportModal);
 }
 
 async function pickExportFolder(): Promise<void> {
-  const dir = await open({ directory: true, multiple: false, title: "Dışa aktarma klasörünü seçin" });
-  if (!dir) return;
-  exportDir = Array.isArray(dir) ? dir[0] : dir;
-  // Bir dahaki sefere hatırlansın.
-  invoke("save_pref", { key: EXPORT_DIR_PREF_KEY, value: exportDir }).catch(() => {});
-  updateExportUi();
+  if (exportBusy) return;
+  try {
+    const dir = await open({ directory: true, multiple: false, title: "Dışa aktarma klasörünü seçin" });
+    if (!dir) return;
+    exportDir = Array.isArray(dir) ? dir[0] : dir;
+    // Bir dahaki sefere hatırlansın.
+    invoke("save_pref", { key: EXPORT_DIR_PREF_KEY, value: exportDir }).catch(() => {});
+    updateExportUi();
+  } catch (err) {
+    showExportError(`Dışa aktarma klasörü seçilemedi: ${String(err)}`);
+  }
 }
 
 async function runExport(): Promise<void> {
@@ -1145,14 +1713,16 @@ async function runExport(): Promise<void> {
   // Çevrilmiş görseli olmayan sayfalar atlanır.
   const items = state.done.filter((i) => i.result.outputs.translated);
   if (!items.length) {
-    showBanner("Dışa aktarılacak çevrilmiş sayfa yok.", "error");
+    showExportError("Dışa aktarılacak çevrilmiş sayfa yok.");
     return;
   }
   const projectName = sanitizeFsName(state.activeProject?.name ?? "Cikti");
 
+  setExportFormat(exportFmt);
   exportBusy = true;
   updateExportUi();
   els.exportConfirm.textContent = "Aktarılıyor…";
+  let success: { target: string; count: number; format: ExportFormat } | null = null;
   try {
     let target: string;
     if (exportFmt === "pdf") {
@@ -1176,14 +1746,21 @@ async function runExport(): Promise<void> {
         }
       }
     }
-    closeExportModal();
-    showBanner(`${items.length} sayfa ${exportFmt.toUpperCase()} olarak dışa aktarıldı → ${target}`, "ok");
+    success = { target, count: items.length, format: exportFmt };
   } catch (err) {
-    showBanner(`Dışa aktarma hatası: ${String(err)}`, "error");
+    showExportError(`Dışa aktarma hatası: ${String(err)}`);
   } finally {
     exportBusy = false;
     els.exportConfirm.textContent = "Dışa Aktar";
     updateExportUi();
+    if (!success) els.exportConfirm.focus();
+  }
+  if (success) {
+    closeExportModal();
+    showBanner(
+      `${success.count} sayfa ${success.format.toUpperCase()} olarak dışa aktarıldı → ${success.target}`,
+      "ok",
+    );
   }
 }
 
@@ -1197,36 +1774,42 @@ async function toggleFullscreen(): Promise<void> {
 
 async function initEvents(): Promise<void> {
   let sidecarStatusEventSeen = false;
-  await listen("python-event", (ev) => {
-    const msg = ev.payload as Record<string, unknown> | undefined;
-    if (!msg || typeof msg !== "object") return;
-    const name =
-      typeof msg.event === "string" ? msg.event : typeof msg.name === "string" ? msg.name : "";
-    const payload = msg.payload as ProgressPayload | undefined;
+  try {
+    await listen("python-event", (ev) => {
+      const msg = ev.payload as Record<string, unknown> | undefined;
+      if (!msg || typeof msg !== "object") return;
+      const name =
+        typeof msg.event === "string" ? msg.event : typeof msg.name === "string" ? msg.name : "";
+      const payload = msg.payload as ProgressPayload | undefined;
 
-    if (name === "translate_page_progress" && payload) {
-      onProgress(payload);
-    } else if (name === "ready") {
-      sidecarStatusEventSeen = true;
-      setBadge("ok", "Python servisi hazır");
-    } else if (name === "exit") {
-      sidecarStatusEventSeen = true;
-      setBadge("error", "Python servisi kapandı");
-    } else if (name === "error") {
-      sidecarStatusEventSeen = true;
-      setBadge("error", "Python servisi hatası");
-    }
-  });
+      if (name === "translate_page_progress" && payload) {
+        onProgress(payload);
+      } else if (name === "ready") {
+        sidecarStatusEventSeen = true;
+        setBadge("ok", "Çeviri altyapısı hazır");
+      } else if (name === "exit") {
+        sidecarStatusEventSeen = true;
+        setBadge("error", "Çeviri altyapısı kapandı");
+        showBanner("İşleme servisi kapandı. Yeni bir işlem başlatmadan önce uygulamayı yeniden başlatın.", "error");
+      } else if (name === "error") {
+        sidecarStatusEventSeen = true;
+        setBadge("error", "Çeviri altyapısı hatası");
+        showBanner("İşleme servisinde hata oluştu. Devam edemezseniz uygulamayı yeniden başlatın.", "error");
+      }
+    });
+  } catch {
+    // Tarayıcı önizlemesinde Tauri olay köprüsü yoktur; yerel UI olayları yine kurulur.
+  }
 
   // Sidecar, WebView yüklenmeden önce hazır olabilir; bu durumda ilk "ready"
   // olayı dinleyici kurulmadan kaçar. Gerçek bir ping ile rozet durumunu
   // eşitle; isteği beklemeyerek bozuk bir servisin arayüz açılışını durdurma.
   void request("ping")
     .then(() => {
-      if (!sidecarStatusEventSeen) setBadge("ok", "Python servisi hazır");
+      if (!sidecarStatusEventSeen) setBadge("ok", "Çeviri altyapısı hazır");
     })
     .catch(() => {
-      if (!sidecarStatusEventSeen) setBadge("error", "Python servisi yanıt vermiyor");
+      if (!sidecarStatusEventSeen) setBadge("error", "Çeviri altyapısı yanıt vermiyor");
     });
 
   els.bannerClose.addEventListener("click", hideBanner);
@@ -1235,10 +1818,45 @@ async function initEvents(): Promise<void> {
 
   els.tabMangas.addEventListener("click", () => setTab("mangas"));
   els.tabAnime.addEventListener("click", () => setTab("anime"));
-  els.btnBackMangas.addEventListener("click", () => setTab("mangas"));
+  const tabs = [els.tabMangas, els.tabAnime];
+  for (const tab of tabs) {
+    tab.addEventListener("keydown", (ev) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(ev.key)) return;
+      ev.preventDefault();
+      const current = tabs.indexOf(tab);
+      const next = ev.key === "Home"
+        ? 0
+        : ev.key === "End"
+          ? tabs.length - 1
+          : (current + (ev.key === "ArrowLeft" ? -1 : 1) + tabs.length) % tabs.length;
+      const nextTab = tabs[next];
+      setTab(nextTab === els.tabAnime ? "anime" : "mangas");
+      nextTab.focus();
+    });
+  }
+  els.btnBackMangas.addEventListener("click", () => {
+    withEditorDraftGuard(() => {
+      state.editMode = false;
+      state.selectedRegionId = null;
+      syncEditControls();
+      setTab("mangas");
+    });
+  });
   els.btnNewProject.addEventListener("click", openNewProjectModal);
+  els.btnNewProjectEmpty.addEventListener("click", openNewProjectModal);
   els.modalClose.addEventListener("click", closeNewProjectModal);
   els.modalBackdrop.addEventListener("click", closeNewProjectModal);
+
+  const retryProjects = (): void => {
+    if (state.projectsError && !state.projectsLoading) void refreshProjects();
+  };
+  els.projectsEmpty.addEventListener("click", retryProjects);
+  els.projectsEmpty.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      retryProjects();
+    }
+  });
 
   // Kart grid zoom: Ctrl (veya Mac trackpad pinch için Cmd/Meta) + tekerlek.
   // passive:false şart — yoksa preventDefault çalışmaz ve tarayıcının kendi
@@ -1268,13 +1886,23 @@ async function initEvents(): Promise<void> {
   $<HTMLDivElement>("confirm-backdrop").addEventListener("click", closeConfirm);
 
   window.addEventListener("keydown", (ev) => {
+    trapModalFocus(ev);
     if (ev.key !== "Escape") return;
+    let modalClosed = false;
     if (!els.confirmModal.classList.contains("hidden")) {
       closeConfirm();
+      modalClosed = true;
     } else if (!els.exportModal.classList.contains("hidden")) {
       closeExportModal();
+      modalClosed = true;
     } else if (!els.newProjectModal.classList.contains("hidden") && !state.running) {
       closeNewProjectModal();
+      modalClosed = true;
+    }
+    if (modalClosed) {
+      // Aynı Escape olayının editör taslağını da geri almasını engelle.
+      ev.preventDefault();
+      ev.stopImmediatePropagation();
     }
   });
 
@@ -1287,44 +1915,73 @@ async function initEvents(): Promise<void> {
     void toggleFullscreen();
   });
 
+  window.addEventListener("beforeunload", (ev) => {
+    const workInProgress =
+      state.running ||
+      state.starting ||
+      state.sourceBusy ||
+      state.editorBusy ||
+      state.saveBusy ||
+      exportBusy ||
+      pendingProjectSaves.size > 0 ||
+      failedProjectSaves.size > 0;
+    if (!hasPendingEditorDraft() && !workInProgress) return;
+    ev.preventDefault();
+    ev.returnValue = "";
+  });
+
   for (const btn of els.modeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
     btn.addEventListener("click", () => {
       const mode = btn.dataset.mode as Mode | undefined;
       if (mode) setMode(mode);
     });
   }
+  enableRadioGroupKeyboard(els.modeGroup);
+  enableRadioGroupKeyboard(els.viewModeGroup);
+  enableRadioGroupKeyboard(els.exportFormatGroup);
 
   els.providerSelect.addEventListener("change", () => {
     state.provider = els.providerSelect.value;
     updateProviderHint();
+    syncConfigControls();
   });
 
   for (const btn of els.viewModeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
     btn.addEventListener("click", () => {
       const view = btn.dataset.view as ViewMode | undefined;
-      if (!view) return;
+      if (!view || state.editMode) return;
       state.viewMode = view;
       for (const b of els.viewModeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
         const active = b.dataset.view === view;
         b.classList.toggle("active", active);
         b.setAttribute("aria-checked", String(active));
+        b.tabIndex = active ? 0 : -1;
       }
       renderSelected();
     });
   }
 
   els.btnOverflow.addEventListener("click", () => {
+    if (state.editMode) return;
     state.showBoxes = !state.showBoxes;
-    els.btnOverflow.classList.toggle("active", state.showBoxes);
+    syncEditControls();
     renderSelected();
   });
 
-  els.btnEdit.addEventListener("click", () => setEditMode(!state.editMode));
+  els.btnEdit.addEventListener("click", () => {
+    if (state.editMode) {
+      withEditorDraftGuard(() => setEditMode(false));
+    } else {
+      setEditMode(true);
+    }
+  });
 
   els.btnStart.addEventListener("click", () => void run());
   els.btnCancel.addEventListener("click", () => {
     state.cancelRequested = true;
     els.btnCancel.disabled = true;
+    els.btnCancel.textContent = "İptal ediliyor…";
+    els.stageDetail.textContent = "Geçerli sayfa tamamlandıktan sonra işlem duracak.";
   });
   els.btnExport.addEventListener("click", () => void openExportModal());
 
@@ -1335,7 +1992,7 @@ async function initEvents(): Promise<void> {
   for (const btn of els.exportFormatGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
     btn.addEventListener("click", () => {
       const fmt = btn.dataset.fmt as ExportFormat | undefined;
-      if (fmt) setExportFormat(fmt);
+      if (fmt && !exportBusy) setExportFormat(fmt);
     });
   }
 }
@@ -1344,13 +2001,14 @@ async function initEvents(): Promise<void> {
 
 async function main(): Promise<void> {
   setMode("auto");
+  syncEditControls();
   await initEvents();
-  await loadProviders();
   setTab("mangas");
   renderSavedIndicator();
   setCardSize(state.cardSize); // CSS varsayılanını JS durumuyla hizala
-  await loadCardSizePref();
-  await refreshProjects();
+  // Proje kütüphanesi Python servisinden bağımsızdır; sağlayıcı sorgusu yavaşlasa
+  // bile ana ekranı bekletmemek için başlangıç yüklerini paralel yürüt.
+  await Promise.all([loadProviders(), loadCardSizePref(), refreshProjects()]);
 }
 
 void main();

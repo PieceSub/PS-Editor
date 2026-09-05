@@ -682,8 +682,8 @@ pub fn run() {
 
             tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                 .title("PS Editor")
-                .inner_size(1180.0, 820.0)
-                .min_inner_size(860.0, 600.0)
+                .inner_size(1200.0, 800.0)
+                .min_inner_size(420.0, 600.0)
                 .resizable(true)
                 .icon(icon)?
                 .initialization_script(CONTEXT_MENU_BLOCK_SCRIPT)

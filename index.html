@@ -7,35 +7,35 @@
   </head>
   <body>
     <main id="app">
-      <header id="app-header">
+      <header id="app-header" aria-label="Uygulama üst çubuğu">
         <div class="brand">
-          <a href="#top" class="brand-link" title="PS Editor">
-            <img src="/logo.png" alt="PS Editor logo" class="logo" />
+          <a href="#app" class="brand-link" title="PS Editor ana sayfa">
+            <img src="/logo.png" alt="PS Editor" class="logo" />
           </a>
-          <span class="alpha-badge">PRE-ALPHA</span>
+          <span class="alpha-badge" aria-label="Pre-alpha sürümü">PRE-ALPHA</span>
         </div>
         <div class="header-right">
-          <div id="saved-indicator" class="saved-indicator idle" title="Kayıt durumu">Kaydedilmedi</div>
-          <div id="sidecar-status" class="badge unknown">Python servisi bağlanıyor…</div>
+          <div id="saved-indicator" class="saved-indicator idle" title="Kayıt durumu" role="status" aria-live="polite" aria-atomic="true">Proje açık değil</div>
+          <div id="sidecar-status" class="badge unknown" role="status" aria-live="polite" aria-atomic="true">Çeviri altyapısı bağlanıyor…</div>
         </div>
       </header>
 
-      <div id="banner" class="banner hidden" role="alert">
+      <div id="banner" class="banner hidden" role="alert" aria-atomic="true">
         <span id="banner-text"></span>
         <button id="banner-close" class="icon-btn" title="Kapat" aria-label="Kapat">×</button>
       </div>
 
       <div id="app-tabbar" class="tabbar">
         <nav class="tabs" role="tablist" aria-label="Ana görünümler">
-          <button id="tab-mangas" class="tab active" role="tab" aria-selected="true" type="button">Mangalar</button>
-          <button id="tab-anime" class="tab" role="tab" aria-selected="false" type="button">Anime</button>
+          <button id="tab-mangas" class="tab active" role="tab" aria-selected="true" aria-controls="mangas-view" type="button">Mangalar</button>
+          <button id="tab-anime" class="tab" role="tab" aria-selected="false" aria-controls="anime-view" type="button">Anime <span class="tab-soon">Yakında</span></button>
         </nav>
-        <button id="btn-new-project" class="btn tabs-add" type="button">+ Yeni çeviri ekle</button>
+        <button id="btn-new-project" class="btn primary tabs-add" type="button"><span aria-hidden="true">+</span> Yeni çeviri ekle</button>
       </div>
 
       <!-- ------------------------- Mangalar sekmesi ------------------------- -->
 
-      <section id="mangas-view" class="view">
+      <section id="mangas-view" class="view" role="tabpanel" aria-labelledby="tab-mangas">
         <div class="projects-head">
           <div>
             <h2>Mangalar</h2>
@@ -43,14 +43,23 @@
           </div>
         </div>
         <div id="project-grid" class="project-grid"></div>
-        <p id="projects-empty" class="hint projects-empty hidden">
-          Henüz proje yok. Sağ üstteki "+ Yeni çeviri ekle" ile ilk projenizi oluşturun.
-        </p>
+        <div id="projects-empty" class="projects-empty hidden">
+          <div class="projects-empty-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11a3 3 0 0 1 3 3v15a3 3 0 0 0-3-3H6.5A2.5 2.5 0 0 0 4 20.5v-15Z" />
+              <path d="M14 6a3 3 0 0 1 3-3h.5A2.5 2.5 0 0 1 20 5.5v15a2.5 2.5 0 0 0-2.5-2.5H14" />
+              <path d="M8 8h2M8 11h2M16 8h1" />
+            </svg>
+          </div>
+          <h3>İlk manga çevirinizi oluşturun</h3>
+          <p class="hint">Bir sayfa ya da manga klasörü seçin; PS Editor metinleri algılayıp temizlesin, çevirsin ve yeniden yerleştirsin.</p>
+          <button id="btn-new-project-empty" class="btn primary empty-cta" type="button"><span aria-hidden="true">+</span> Yeni çeviri oluştur</button>
+        </div>
       </section>
 
       <!-- ------------------------- Anime sekmesi ------------------------- -->
 
-      <section id="anime-view" class="view hidden">
+      <section id="anime-view" class="view hidden" role="tabpanel" aria-labelledby="tab-anime">
         <div class="anime-empty">
           <svg class="anime-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <rect x="2" y="4" width="20" height="16" rx="2" />
@@ -63,22 +72,22 @@
 
       <!-- ------------------------- Proje düzenleme görünümü (gizli durum) ------------------------- -->
 
-      <section id="editor-view" class="view hidden">
-        <div id="editor-nav" class="editor-nav">
+      <section id="editor-view" class="view hidden" aria-label="Proje düzenleyici">
+        <nav id="editor-nav" class="editor-nav" aria-label="Proje gezinme çubuğu">
           <button id="btn-back-mangas" class="btn chip" type="button">← Mangalar'a dön</button>
-        </div>
+        </nav>
         <div id="editor-empty" class="editor-empty hidden">
           <p class="empty-title">Henüz bir proje açılmadı.</p>
           <p class="hint">Mangalar sekmesinden bir proje seçin ya da "+ Yeni çeviri ekle" ile yeni bir çeviri başlatın.</p>
         </div>
 
-        <section id="results-card" class="card hidden">
+        <section id="results-card" class="card hidden" aria-labelledby="results-title">
           <div class="card-head results-head">
             <div>
               <h2 id="results-title">Sonuçlar</h2>
-              <p id="result-summary" class="hint"></p>
+              <p id="result-summary" class="hint" role="status" aria-live="polite"></p>
             </div>
-            <div class="toolbar">
+            <div class="toolbar" role="toolbar" aria-label="Görüntü ve düzenleme araçları">
               <div class="segmented small" id="view-mode-group" role="radiogroup" aria-label="Görüntüleme modu">
                 <button class="seg active" data-view="compare" role="radio" aria-checked="true" type="button">Karşılaştır</button>
                 <button class="seg" data-view="side" role="radio" aria-checked="false" type="button">Yan Yana</button>
@@ -89,24 +98,24 @@
             </div>
           </div>
 
-          <div id="overflow-warning" class="warn-box hidden"></div>
+          <div id="overflow-warning" class="warn-box hidden" role="alert"></div>
 
           <p id="page-meta" class="hint page-meta hidden"></p>
 
-          <div id="viewer" class="viewer"></div>
+          <div id="viewer" class="viewer" role="group" aria-label="Manga sayfası çalışma alanı"></div>
 
-          <div id="thumbs" class="thumbs hidden"></div>
+          <nav id="thumbs" class="thumbs hidden" aria-label="Proje sayfaları"></nav>
         </section>
       </section>
     </main>
 
     <!-- ------------------- Yeni çeviri ekle (modal) ------------------- -->
 
-    <div id="new-project-modal" class="modal hidden" aria-hidden="true">
-      <div id="modal-backdrop" class="modal-backdrop"></div>
+    <div id="new-project-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="new-project-title" aria-hidden="true">
+      <div id="modal-backdrop" class="modal-backdrop" aria-hidden="true"></div>
       <div class="modal-card">
         <div class="modal-head">
-          <h2>Yeni çeviri ekle</h2>
+          <h2 id="new-project-title">Yeni çeviri ekle</h2>
           <button id="modal-close" class="icon-btn" title="Kapat" aria-label="Kapat">×</button>
         </div>
 
@@ -122,10 +131,10 @@
           </div>
           <p class="hint">Tek bir manga sayfası ya da sayfalar içeren bir klasör seçin.</p>
           <div class="row">
-            <button id="btn-pick-file" class="btn secondary">Dosya Seç</button>
-            <button id="btn-pick-folder" class="btn secondary">Klasör Seç</button>
+            <button id="btn-pick-file" class="btn secondary" type="button">Dosya seç</button>
+            <button id="btn-pick-folder" class="btn secondary" type="button">Klasör seç</button>
           </div>
-          <div id="source-info" class="source-info hidden"></div>
+          <div id="source-info" class="source-info hidden" role="status" aria-live="polite"></div>
 
           <hr class="divider" />
 
@@ -134,8 +143,8 @@
           </div>
 
           <div class="field">
-            <label class="field-label">İşlem modu</label>
-            <div class="segmented" id="mode-group" role="radiogroup" aria-label="İşlem modu">
+            <span class="field-label" id="mode-label">İşlem modu</span>
+            <div class="segmented" id="mode-group" role="radiogroup" aria-labelledby="mode-label">
               <button class="seg active" data-mode="auto" role="radio" aria-checked="true" type="button">Otomatik</button>
               <button class="seg" data-mode="local" role="radio" aria-checked="false" type="button">Yerel</button>
               <button class="seg" data-mode="api" role="radio" aria-checked="false" type="button">API</button>
@@ -168,22 +177,22 @@
           </div>
 
           <div class="row start-row">
-            <button id="btn-start" class="btn primary" disabled>İşlemeyi Başlat</button>
-            <button id="btn-cancel" class="btn ghost hidden">İptal</button>
+            <button id="btn-start" class="btn primary" type="button" disabled>İşlemeyi başlat</button>
+            <button id="btn-cancel" class="btn ghost hidden" type="button">İptal</button>
           </div>
         </section>
 
-        <section id="progress-card" class="card hidden">
+        <section id="progress-card" class="card hidden" role="status" aria-live="polite" aria-atomic="false">
           <div class="card-head">
             <h2>İşleniyor…</h2>
             <span id="progress-count" class="muted"></span>
           </div>
           <div class="bar-wrap">
-            <div class="bar" id="overall-bar"><div class="fill" id="overall-fill"></div></div>
+            <div class="bar" id="overall-bar" role="progressbar" aria-label="Toplam ilerleme" aria-describedby="overall-hint" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="fill" id="overall-fill"></div></div>
           </div>
           <p class="hint" id="overall-hint"></p>
           <div class="bar-row">
-            <div class="bar current" id="page-bar"><div class="fill" id="page-fill"></div></div>
+            <div class="bar current" id="page-bar" role="progressbar" aria-label="Geçerli sayfanın ilerlemesi" aria-describedby="page-pct" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="fill" id="page-fill"></div></div>
             <span id="page-pct" class="pct">%0</span>
           </div>
           <p class="stage" id="stage-label">Hazırlanıyor…</p>
@@ -194,8 +203,8 @@
 
     <!-- ------------------------- Silme onayı (modal) ------------------------- -->
 
-    <div id="confirm-modal" class="modal hidden" aria-hidden="true">
-      <div id="confirm-backdrop" class="modal-backdrop"></div>
+    <div id="confirm-modal" class="modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message" aria-hidden="true">
+      <div id="confirm-backdrop" class="modal-backdrop" aria-hidden="true"></div>
       <div class="modal-card confirm-card">
         <h2 id="confirm-title">Projeyi sil</h2>
         <p id="confirm-message" class="hint"></p>
@@ -208,23 +217,24 @@
 
     <!-- ------------------------- Dışa aktarma (modal) ------------------------- -->
 
-    <div id="export-modal" class="modal hidden" aria-hidden="true">
-      <div id="export-backdrop" class="modal-backdrop"></div>
+    <div id="export-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="export-title" aria-describedby="export-description" aria-hidden="true" aria-busy="false" tabindex="-1">
+      <div id="export-backdrop" class="modal-backdrop" aria-hidden="true"></div>
       <div class="modal-card confirm-card">
-        <h2>Dışa Aktar</h2>
-        <p class="hint">Hedef klasörü ve formatı seçin.</p>
+        <h2 id="export-title">Dışa aktar</h2>
+        <p id="export-description" class="hint">Hedef klasörü ve formatı seçin.</p>
+        <p id="export-status" class="hint hidden" role="status" aria-live="polite"></p>
 
         <div class="field">
-          <label class="field-label">Kaydedilecek klasör</label>
+          <span class="field-label" id="export-folder-label">Kaydedilecek klasör</span>
           <div class="row" style="margin-top: 0;">
-            <button id="export-folder-btn" class="btn secondary" type="button">Klasör Seç…</button>
+            <button id="export-folder-btn" class="btn secondary" type="button" aria-labelledby="export-folder-label export-folder-btn">Klasör seç…</button>
           </div>
-          <span id="export-folder-text" class="hint export-folder-text">Seçilmedi</span>
+          <span id="export-folder-text" class="hint export-folder-text" role="status" aria-live="polite">Seçilmedi</span>
         </div>
 
         <div class="field">
-          <label class="field-label">Format</label>
-          <div class="segmented" id="export-format-group" role="radiogroup" aria-label="Dışa aktarma formatı">
+          <span class="field-label" id="export-format-label">Format</span>
+          <div class="segmented" id="export-format-group" role="radiogroup" aria-labelledby="export-format-label">
             <button class="seg active" data-fmt="png" role="radio" aria-checked="true" type="button">PNG</button>
             <button class="seg" data-fmt="svg" role="radio" aria-checked="false" type="button">SVG</button>
             <button class="seg" data-fmt="pdf" role="radio" aria-checked="false" type="button">PDF</button>
@@ -234,7 +244,7 @@
 
         <div class="row confirm-row">
           <button id="export-cancel" class="btn secondary" type="button">Vazgeç</button>
-          <button id="export-confirm" class="btn primary" type="button" disabled>Dışa Aktar</button>
+          <button id="export-confirm" class="btn primary" type="button" disabled>Dışa aktar</button>
         </div>
       </div>
     </div>

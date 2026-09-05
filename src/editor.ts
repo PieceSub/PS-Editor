@@ -42,6 +42,7 @@ export interface EditorApi {
   onApply(draft: EditorDraft): Promise<void>;
   onDisable(region: Region): Promise<void>;
   onDelete(region: Region): Promise<void>;
+  onBusyChange?(busy: boolean): void;
 }
 
 const MIN_DRAG_PX = 8;
@@ -50,6 +51,13 @@ const UPDATED_HINT = "Kaydedilmemiş değişiklikler var — Uygula ile göster.
 /** Önceki render'dan kalan klavye dinleyicisini temizlemek için tutulur
  * (renderEditor her çağrıldığında yeniden kurulur, sızıntı olmaz). */
 let activeKeyHandler: ((ev: KeyboardEvent) => void) | null = null;
+
+/** Editör görünümü kaldırıldığında global klavye dinleyicisini de bırakır. */
+export function disposeEditor(): void {
+  if (!activeKeyHandler) return;
+  window.removeEventListener("keydown", activeKeyHandler);
+  activeKeyHandler = null;
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -95,6 +103,18 @@ const PALETTE = [
   "#f97316",
 ];
 
+const COLOR_NAMES: Record<string, string> = {
+  "#ffffff": "Beyaz",
+  "#000000": "Siyah",
+  "#ff3b30": "Kırmızı",
+  "#2f6fe4": "Mavi",
+  "#ffc400": "Sarı",
+  "#22c55e": "Yeşil",
+  "#e05a8a": "Pembe",
+  "#8b5cf6": "Mor",
+  "#f97316": "Turuncu",
+};
+
 export function renderEditor(
   container: HTMLElement,
   page: PageResult,
@@ -102,10 +122,7 @@ export function renderEditor(
   ver: number,
   api: EditorApi,
 ): void {
-  if (activeKeyHandler) {
-    window.removeEventListener("keydown", activeKeyHandler);
-    activeKeyHandler = null;
-  }
+  disposeEditor();
   container.replaceChildren();
   const wrap = el("div", "editor-wrap");
   const stage = el("div", "editor-stage");
@@ -118,6 +135,8 @@ export function renderEditor(
   stage.appendChild(img);
 
   const overlay = el("div", "ov-layer editor-overlay");
+  overlay.setAttribute("role", "group");
+  overlay.setAttribute("aria-label", "Metin bölgeleri");
   stage.appendChild(overlay);
 
   let imgW = 1;
@@ -139,6 +158,7 @@ export function renderEditor(
 
   let dirty = false;
   let applying = false;
+  let applyError: string | null = null;
   let moveOffset: { dx: number; dy: number } | null = null;
   let drawStart: { x: number; y: number } | null = null;
 
@@ -159,7 +179,9 @@ export function renderEditor(
     // bbox backend'de [x1, y1, x2, y2] formatındadır (pipeline.py ile aynı).
     for (const r of page.regions) {
       if (r.bbox.length < 4) continue;
-      const [x1, y1, x2, y2] = r.bbox;
+      // Seçili bölge henüz uygulanmamış olsa da taşınan taslak konumunda görünür.
+      const displayedBbox = selected && draft && r.id === selected.id ? draft.bbox : r.bbox;
+      const [x1, y1, x2, y2] = displayedBbox;
       const box = el("div", "reg-box");
       if (r.disabled) box.classList.add("disabled");
       if (r.manual) box.classList.add("manual");
@@ -174,6 +196,18 @@ export function renderEditor(
       box.style.height = pct(Math.max(0, y2 - y1), imgH);
       box.dataset.rid = String(r.id);
       box.title = `${r.label_name || "Bölge"}${r.manual ? " (elle)" : ""}${r.disabled ? " — kapalı" : ""}`;
+      box.tabIndex = 0;
+      box.setAttribute("role", "button");
+      box.setAttribute("aria-pressed", String(!!selected && r.id === selected.id));
+      box.setAttribute(
+        "aria-label",
+        `${r.label_name || "Bölge"}${r.manual ? ", elle eklendi" : ""}${r.disabled ? ", kapalı" : ""}`,
+      );
+      box.addEventListener("keydown", (ev) => {
+        if (ev.key !== "Enter" && ev.key !== " ") return;
+        ev.preventDefault();
+        api.onSelect(r.id);
+      });
 
       // Seçili bölgede canlı önizleme
       if (selected && r.id === selected.id && draft) {
@@ -183,7 +217,7 @@ export function renderEditor(
           const size =
             draft.style.font_size_override ??
             selected.font_size ??
-            estimateFontSize(selected.bbox);
+            estimateFontSize(draft.bbox);
           prev.style.fontSize = `${Math.round(size * scaleX())}px`;
           prev.style.fontWeight = draft.style.font_weight === "bold" ? "700" : "400";
           prev.style.textAlign = draft.style.align;
@@ -223,7 +257,8 @@ export function renderEditor(
     let bestArea = Infinity;
     for (const r of page.regions) {
       if (r.bbox.length < 4) continue;
-      const [x1, y1, x2, y2] = r.bbox;
+      const bbox = selected && draft && r.id === selected.id ? draft.bbox : r.bbox;
+      const [x1, y1, x2, y2] = bbox;
       if (ix < x1 || ix > x2 || iy < y1 || iy > y2) continue;
       const area = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
       if (area < bestArea) {
@@ -272,8 +307,9 @@ export function renderEditor(
         Math.round(clamp(y + h, 0, imgH)),
       ];
       dirty = true;
+      applyError = null;
       renderOverlay();
-      renderPanel();
+      syncPanelState();
       return;
     }
     if (drawStart) {
@@ -321,10 +357,35 @@ export function renderEditor(
 
   /* ------------------------------------------------ panel + stil kontrolleri */
 
-  function markDirty(): void {
+  function markDirty(syncValues = false): void {
     dirty = true;
+    applyError = null;
     renderOverlay();
-    renderPanel();
+    syncPanelState(syncValues);
+  }
+
+  function regionStatusText(): string {
+    if (!selected || !draft) return "";
+    return `Bölge ${page.regions.indexOf(selected) + 1} · ${selected.label_name || "?"}${
+      selected.manual ? " · elle" : ""
+    }${draft.disabled ? " · kapalı" : ""}`;
+  }
+
+  /** ARIA radiogroup'larında beklenen ok/Home/End klavye davranışı. */
+  function handleRadioGroupKeydown(ev: KeyboardEvent, group: HTMLElement): void {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(ev.key)) return;
+    const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>("button.seg:not(:disabled)"));
+    const current = buttons.indexOf(ev.target as HTMLButtonElement);
+    if (current < 0 || !buttons.length) return;
+
+    ev.preventDefault();
+    let next = current;
+    if (ev.key === "Home") next = 0;
+    else if (ev.key === "End") next = buttons.length - 1;
+    else if (ev.key === "ArrowLeft" || ev.key === "ArrowUp") next = (current - 1 + buttons.length) % buttons.length;
+    else next = (current + 1) % buttons.length;
+    buttons[next].focus();
+    buttons[next].click();
   }
 
   function buildControlPanel(): HTMLElement {
@@ -335,16 +396,12 @@ export function renderEditor(
     }
 
     const head = el("div", "editor-panel-head");
-    head.appendChild(
-      el(
-        "span",
-        "muted",
-        `Bölge ${page.regions.indexOf(selected) + 1} · ${selected.label_name || "?"}${
-          selected.manual ? " · elle" : ""
-        }${selected.disabled ? " · kapalı" : ""}`,
-      ),
-    );
-    if (dirty) head.appendChild(el("span", "dirty-hint", "Kaydedilmedi"));
+    head.appendChild(el("span", "muted region-status", regionStatusText()));
+    const dirtyBadge = el("span", "dirty-hint", "Kaydedilmedi");
+    dirtyBadge.classList.toggle("hidden", !dirty);
+    dirtyBadge.setAttribute("role", "status");
+    dirtyBadge.setAttribute("aria-live", "polite");
+    head.appendChild(dirtyBadge);
     panel.appendChild(head);
 
     const field = el("div", "field");
@@ -369,34 +426,44 @@ export function renderEditor(
     const styleRow = el("div", "row");
     const weightGroup = el("div", "segmented small");
     weightGroup.setAttribute("role", "radiogroup");
+    weightGroup.setAttribute("aria-label", "Yazı kalınlığı");
     for (const [val, text] of [["normal", "Normal"], ["bold", "Kalın"]] as const) {
       const b = el("button", "seg") as HTMLButtonElement;
       b.type = "button";
       b.dataset.w = val;
       b.textContent = text;
       b.classList.toggle("active", draft.style.font_weight === val);
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-checked", String(draft.style.font_weight === val));
+      b.tabIndex = draft.style.font_weight === val ? 0 : -1;
       b.addEventListener("click", () => {
         draft.style.font_weight = val;
         markDirty();
       });
       weightGroup.appendChild(b);
     }
+    weightGroup.addEventListener("keydown", (ev) => handleRadioGroupKeydown(ev, weightGroup));
     styleRow.appendChild(weightGroup);
 
     const alignGroup = el("div", "segmented small");
     alignGroup.setAttribute("role", "radiogroup");
+    alignGroup.setAttribute("aria-label", "Metin hizalaması");
     for (const [val, text] of [["left", "Sol"], ["center", "Orta"], ["right", "Sağ"]] as const) {
       const b = el("button", "seg") as HTMLButtonElement;
       b.type = "button";
       b.dataset.a = val;
       b.textContent = text;
       b.classList.toggle("active", draft.style.align === val);
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-checked", String(draft.style.align === val));
+      b.tabIndex = draft.style.align === val ? 0 : -1;
       b.addEventListener("click", () => {
         draft.style.align = val;
         markDirty();
       });
       alignGroup.appendChild(b);
     }
+    alignGroup.addEventListener("keydown", (ev) => handleRadioGroupKeydown(ev, alignGroup));
     styleRow.appendChild(alignGroup);
     panel.appendChild(styleRow);
 
@@ -416,7 +483,8 @@ export function renderEditor(
     sizeInput.min = "4";
     sizeInput.max = "200";
     sizeInput.value = String(draft.style.font_size_override ?? 16);
-    sizeInput.disabled = autoCb.checked || draft.disabled;
+    sizeInput.disabled = autoCb.checked || draft.disabled || applying;
+    sizeInput.setAttribute("aria-label", "Yazı boyutu (piksel)");
     sizeInput.addEventListener("input", () => {
       const v = parseInt(sizeInput.value, 10);
       if (Number.isFinite(v) && v >= 1) {
@@ -440,11 +508,17 @@ export function renderEditor(
 
     // Renk
     const colorField = el("div", "field");
-    colorField.appendChild(el("span", "field-label", "Metin rengi"));
+    colorField.setAttribute("role", "group");
+    colorField.setAttribute("aria-labelledby", "reg-editor-color-label");
+    const colorLabel = el("span", "field-label", "Metin rengi");
+    colorLabel.id = "reg-editor-color-label";
+    colorField.appendChild(colorLabel);
     const swatches = el("div", "swatches");
     const autoSw = el("button", "swatch auto") as HTMLButtonElement;
     autoSw.type = "button";
     autoSw.title = "Otomatik (siyah dolgu + beyaz kontur)";
+    autoSw.setAttribute("aria-label", "Otomatik metin rengi");
+    autoSw.setAttribute("aria-pressed", String(draft.style.color === null));
     autoSw.textContent = "Oto";
     autoSw.classList.toggle("active", draft.style.color === null);
     autoSw.addEventListener("click", () => {
@@ -458,6 +532,8 @@ export function renderEditor(
       sw.style.background = c;
       sw.dataset.color = c;
       sw.title = c;
+      sw.setAttribute("aria-label", `${COLOR_NAMES[c] ?? "Renk"} (${c})`);
+      sw.setAttribute("aria-pressed", String(draft.style.color === c));
       sw.classList.toggle("active", draft.style.color === c);
       sw.addEventListener("click", () => {
         draft.style.color = c;
@@ -470,6 +546,7 @@ export function renderEditor(
     colorInput.value = draft.style.color ?? "#e05a8a";
     colorInput.classList.add("color-input");
     colorInput.title = "Serbest renk seçimi";
+    colorInput.setAttribute("aria-label", "Özel metin rengi seç");
     colorInput.addEventListener("input", () => {
       draft.style.color = colorInput.value;
       markDirty();
@@ -482,6 +559,7 @@ export function renderEditor(
     const actions = el("div", "row editor-actions");
     const btnApply = el("button", "btn primary") as HTMLButtonElement;
     btnApply.type = "button";
+    btnApply.id = "reg-editor-apply";
     btnApply.textContent = draft.disabled ? "Kapalı bırak" : "Uygula";
     btnApply.disabled = applying || (!dirty && !draft.disabled);
     btnApply.addEventListener("click", () => void handleApply());
@@ -489,58 +567,149 @@ export function renderEditor(
 
     const btnReset = el("button", "btn secondary") as HTMLButtonElement;
     btnReset.type = "button";
+    btnReset.id = "reg-editor-reset";
     btnReset.textContent = "Varsayılan stil";
     btnReset.addEventListener("click", () => {
       draft.style = { ...REGION_STYLE_DEFAULTS };
-      markDirty();
+      markDirty(true);
     });
     actions.appendChild(btnReset);
 
-    if (draft.disabled) {
-      const btnEnable = el("button", "btn secondary") as HTMLButtonElement;
-      btnEnable.type = "button";
-      btnEnable.textContent = "Etkinleştir";
-      btnEnable.addEventListener("click", () => {
+    const btnToggleDisabled = el("button", "btn ghost") as HTMLButtonElement;
+    btnToggleDisabled.type = "button";
+    btnToggleDisabled.id = "reg-editor-toggle-disabled";
+    btnToggleDisabled.textContent = draft.disabled ? "Etkinleştir" : "Devre dışı bırak";
+    btnToggleDisabled.setAttribute("aria-pressed", String(draft.disabled));
+    btnToggleDisabled.addEventListener("click", () => {
+      if (draft.disabled) {
         draft.disabled = false;
         draft.translation = selected.translation || "";
-        markDirty();
-      });
-      actions.appendChild(btnEnable);
-    } else {
-      const btnDisable = el("button", "btn ghost") as HTMLButtonElement;
-      btnDisable.type = "button";
-      btnDisable.textContent = "Devre Dışı Bırak";
-      btnDisable.addEventListener("click", () => {
+      } else {
         draft.disabled = true;
-        markDirty();
-      });
-      actions.appendChild(btnDisable);
-    }
+      }
+      markDirty(true);
+    });
+    actions.appendChild(btnToggleDisabled);
 
     const btnDelete = el("button", "btn ghost danger") as HTMLButtonElement;
     btnDelete.type = "button";
+    btnDelete.id = "reg-editor-delete";
     btnDelete.textContent = "Sil";
     btnDelete.addEventListener("click", () => void handleDelete());
     actions.appendChild(btnDelete);
     panel.appendChild(actions);
 
-    if (dirty) panel.appendChild(el("p", "hint", UPDATED_HINT));
-    if (selected.overflow && !selected.disabled) {
-      panel.appendChild(
-        el("p", "hint warn-text", "Bu bölgede çeviri balon sınırını aşıyor — boyutu küçültün ya da metni kısaltın."),
-      );
-    }
+    const updatedHint = el("p", "hint editor-dirty-detail", UPDATED_HINT);
+    updatedHint.classList.toggle("hidden", !dirty);
+    panel.appendChild(updatedHint);
+
+    const overflowHint = el(
+      "p",
+      "hint warn-text editor-overflow-hint",
+      "Bu bölgede çeviri balon sınırını aşıyor — boyutu küçültün ya da metni kısaltın.",
+    );
+    overflowHint.classList.toggle("hidden", !selected.overflow || draft.disabled);
+    panel.appendChild(overflowHint);
+
+    const errorHint = el("p", "hint warn-text editor-apply-error");
+    errorHint.classList.add("hidden");
+    errorHint.setAttribute("role", "alert");
+    panel.appendChild(errorHint);
     return panel;
   }
 
-  function renderPanel(): void {
-    panel.replaceChildren(buildControlPanel());
+  /** Paneli yeniden oluşturmadan durum, değer ve ARIA niteliklerini eşitler. */
+  function syncPanelState(syncValues = false): void {
+    if (!selected || !draft) return;
+    const root = panel.querySelector<HTMLElement>(".editor-panel");
+    if (!root) return;
+    root.setAttribute("aria-busy", String(applying));
+
+    const status = root.querySelector<HTMLElement>(".region-status");
+    if (status) status.textContent = regionStatusText();
+    root.querySelector<HTMLElement>(".dirty-hint")?.classList.toggle("hidden", !dirty);
+    root.querySelector<HTMLElement>(".editor-dirty-detail")?.classList.toggle("hidden", !dirty);
+
+    const errorHint = root.querySelector<HTMLElement>(".editor-apply-error");
+    if (errorHint) {
+      errorHint.textContent = applyError ?? "";
+      errorHint.classList.toggle("hidden", !applyError);
+    }
+
+    const ta = root.querySelector<HTMLTextAreaElement>("#reg-editor-text");
+    if (ta) {
+      if (syncValues) ta.value = draft.translation;
+      ta.disabled = draft.disabled || applying;
+      ta.placeholder = draft.disabled ? "Bu bölge kapalı — Etkinleştir ve Uygula ile geri açın" : "Çeviri…";
+    }
+
+    for (const b of root.querySelectorAll<HTMLButtonElement>("[data-w]")) {
+      const active = b.dataset.w === draft.style.font_weight;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-checked", String(active));
+      b.tabIndex = active ? 0 : -1;
+      b.disabled = applying;
+    }
+    for (const b of root.querySelectorAll<HTMLButtonElement>("[data-a]")) {
+      const active = b.dataset.a === draft.style.align;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-checked", String(active));
+      b.tabIndex = active ? 0 : -1;
+      b.disabled = applying;
+    }
+
+    const autoCb = root.querySelector<HTMLInputElement>("#reg-editor-auto-size");
+    if (autoCb) {
+      if (syncValues) autoCb.checked = draft.style.font_size_override === null;
+      autoCb.disabled = applying;
+    }
+    const sizeInput = root.querySelector<HTMLInputElement>("#reg-editor-size");
+    if (sizeInput) {
+      if (syncValues) sizeInput.value = String(draft.style.font_size_override ?? 16);
+      sizeInput.disabled = applying || draft.disabled || draft.style.font_size_override === null;
+    }
+
+    for (const sw of root.querySelectorAll<HTMLButtonElement>("button.swatch")) {
+      const active = sw.classList.contains("auto")
+        ? draft.style.color === null
+        : sw.dataset.color === draft.style.color;
+      sw.classList.toggle("active", active);
+      sw.setAttribute("aria-pressed", String(active));
+      sw.disabled = applying;
+    }
+    const colorInput = root.querySelector<HTMLInputElement>(".color-input");
+    if (colorInput) {
+      if (syncValues && draft.style.color) colorInput.value = draft.style.color;
+      colorInput.disabled = applying;
+    }
+
+    const btnApply = root.querySelector<HTMLButtonElement>("#reg-editor-apply");
+    if (btnApply) {
+      btnApply.textContent = applying ? "Uygulanıyor…" : draft.disabled ? "Kapalı bırak" : "Uygula";
+      btnApply.disabled = applying || (!dirty && !draft.disabled);
+    }
+    const btnReset = root.querySelector<HTMLButtonElement>("#reg-editor-reset");
+    if (btnReset) btnReset.disabled = applying;
+    const btnToggleDisabled = root.querySelector<HTMLButtonElement>("#reg-editor-toggle-disabled");
+    if (btnToggleDisabled) {
+      btnToggleDisabled.textContent = draft.disabled ? "Etkinleştir" : "Devre dışı bırak";
+      btnToggleDisabled.setAttribute("aria-pressed", String(draft.disabled));
+      btnToggleDisabled.disabled = applying;
+    }
+    const btnDelete = root.querySelector<HTMLButtonElement>("#reg-editor-delete");
+    if (btnDelete) btnDelete.disabled = applying;
+
+    root
+      .querySelector<HTMLElement>(".editor-overflow-hint")
+      ?.classList.toggle("hidden", !selected.overflow || draft.disabled);
   }
 
   async function handleApply(): Promise<void> {
     if (!draft || applying) return;
     applying = true;
-    renderPanel();
+    api.onBusyChange?.(true);
+    applyError = null;
+    syncPanelState();
     try {
       await api.onApply({
         ...draft,
@@ -551,14 +720,32 @@ export function renderEditor(
       });
     } catch (err) {
       console.error("Uygula hatası:", err);
+      applyError = `Değişiklikler uygulanamadı: ${String(err)}`;
     } finally {
       applying = false;
+      api.onBusyChange?.(false);
+      syncPanelState();
     }
   }
 
   async function handleDelete(): Promise<void> {
-    if (!selected) return;
-    await api.onDelete(selected);
+    if (!selected || applying) return;
+    const approved = window.confirm("Bu bölge kalıcı olarak silinecek. Devam edilsin mi?");
+    if (!approved) return;
+    applying = true;
+    api.onBusyChange?.(true);
+    applyError = null;
+    syncPanelState();
+    try {
+      await api.onDelete(selected);
+    } catch (err) {
+      console.error("Bölge silme hatası:", err);
+      applyError = `Bölge silinemedi: ${String(err)}`;
+    } finally {
+      applying = false;
+      api.onBusyChange?.(false);
+      syncPanelState();
+    }
   }
 
   /* ------------------------------------------------------------ montaj */
@@ -567,6 +754,7 @@ export function renderEditor(
   panel.appendChild(buildControlPanel());
   wrap.append(stage, panel);
   container.appendChild(wrap);
+  syncPanelState(true);
   renderOverlay();
 
   void img
@@ -597,8 +785,9 @@ export function renderEditor(
       draft.disabled = !!selected.disabled;
       draft.prevBbox = [...selected.bbox];
       dirty = false;
+      applyError = null;
       renderOverlay();
-      renderPanel();
+      syncPanelState(true);
       return;
     }
     if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
