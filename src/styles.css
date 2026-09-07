@@ -1586,6 +1586,15 @@ select:hover:not(:disabled),
   box-shadow: none;
 }
 
+.progress-modal-card {
+  width: 460px;
+}
+
+.progress-actions {
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
 .modal-head {
   display: flex;
   align-items: center;
@@ -1768,6 +1777,10 @@ select:hover:not(:disabled),
   .modal {
     align-items: flex-end;
     padding: 8px;
+  }
+
+  .progress-modal {
+    align-items: center;
   }
 
   .modal-card {

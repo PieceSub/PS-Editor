@@ -187,6 +187,7 @@ const els = {
   resultsCard: $<HTMLElement>("results-card"),
   resultsTitle: $<HTMLHeadingElement>("results-title"),
   newProjectModal: $<HTMLDivElement>("new-project-modal"),
+  progressModal: $<HTMLDivElement>("progress-modal"),
   modalBackdrop: $<HTMLDivElement>("modal-backdrop"),
   modalClose: $<HTMLButtonElement>("modal-close"),
   projectName: $<HTMLInputElement>("project-name"),
@@ -272,7 +273,7 @@ function setBadge(kind: "ok" | "error" | "unknown", text: string): void {
 const modalReturnFocus = new WeakMap<HTMLElement, HTMLElement>();
 
 function visibleModal(): HTMLElement | null {
-  return [els.confirmModal, els.exportModal, els.newProjectModal].find(
+  return [els.confirmModal, els.exportModal, els.progressModal, els.newProjectModal].find(
     (modal) => !modal.classList.contains("hidden"),
   ) ?? null;
 }
@@ -302,6 +303,27 @@ function hideModal(modal: HTMLElement): void {
   window.setTimeout(() => {
     if (returnTarget?.isConnected && !returnTarget.closest(".hidden")) returnTarget.focus();
   }, 0);
+}
+
+/** Bir modalı kapatırken odağı önceki pencereye geri vermeden diğerine taşır. */
+function swapModal(from: HTMLElement, to: HTMLElement, initialFocus: HTMLElement): void {
+  const returnTarget = modalReturnFocus.get(from);
+  modalReturnFocus.delete(from);
+  if (returnTarget) {
+    modalReturnFocus.set(to, returnTarget);
+  } else {
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) modalReturnFocus.set(to, active);
+  }
+
+  from.classList.add("hidden");
+  from.setAttribute("aria-hidden", "true");
+  to.classList.remove("hidden");
+  to.setAttribute("aria-hidden", "false");
+  els.app.setAttribute("inert", "");
+  document.documentElement.classList.add("modal-open");
+  document.body.classList.add("modal-open");
+  window.setTimeout(() => initialFocus.focus(), 0);
 }
 
 function trapModalFocus(ev: KeyboardEvent): void {
@@ -754,7 +776,6 @@ function openNewProjectModal(): void {
   els.sourceInfo.textContent = "";
   els.sourceInfo.setAttribute("aria-busy", "false");
   els.sourceInfo.classList.add("hidden");
-  els.progressCard.classList.add("hidden");
   els.projectName.value = "";
   syncConfigControls();
   showModal(els.newProjectModal, els.btnPickFile);
@@ -999,13 +1020,18 @@ function syncConfigControls(): void {
   }
 }
 
+function setProgressBusy(busy: boolean): void {
+  els.progressCard.setAttribute("aria-busy", String(busy));
+  els.progressModal.setAttribute("aria-busy", String(busy));
+}
+
 function setRunning(running: boolean): void {
   state.running = running;
   syncConfigControls();
   els.btnCancel.classList.toggle("hidden", !running);
   els.btnCancel.disabled = !running;
   els.btnCancel.textContent = "İptal";
-  els.progressCard.setAttribute("aria-busy", String(running));
+  setProgressBusy(running);
 }
 
 async function run(): Promise<void> {
@@ -1013,8 +1039,15 @@ async function run(): Promise<void> {
   if (!pages.length || state.running || state.starting) return;
   state.starting = true;
   syncConfigControls();
+  setOverallProgress(0);
+  setPageProgress(0, "Hazırlanıyor…", "Önceki proje kayıtları denetleniyor…");
+  els.progressCount.textContent = "";
+  setProgressBusy(true);
+  swapModal(els.newProjectModal, els.progressModal, els.progressModal);
   if (!(await flushProjectSaves())) {
     state.starting = false;
+    setProgressBusy(false);
+    swapModal(els.progressModal, els.newProjectModal, els.btnStart);
     showBanner("Önceki projedeki değişiklikler kaydedilemedi; yeni proje başlatılmadı.", "error");
     syncConfigControls();
     return;
@@ -1031,7 +1064,6 @@ async function run(): Promise<void> {
   hideBanner();
   state.starting = false;
   setRunning(true);
-  els.progressCard.classList.remove("hidden");
   els.resultsCard.classList.add("hidden");
   setOverallProgress(0);
   setPageProgress(0, stageLabel("started"), "Hazırlanıyor…");
@@ -1054,6 +1086,7 @@ async function run(): Promise<void> {
     projectId = created.id;
   } catch (err) {
     setRunning(false);
+    swapModal(els.progressModal, els.newProjectModal, els.btnStart);
     const message = `Proje oluşturulamadı: ${String(err)}`;
     setPageProgress(0, "İşlem başlatılamadı", message);
     els.overallHint.textContent = "Ayarları kontrol edip yeniden deneyin.";
@@ -1115,7 +1148,7 @@ async function run(): Promise<void> {
   }
 
   setRunning(false);
-  els.progressCard.classList.add("hidden");
+  hideModal(els.progressModal);
 
   if (state.done.length) {
     syncManualRegionSeq();
@@ -1124,7 +1157,6 @@ async function run(): Promise<void> {
     renderSavedIndicator();
     renderResults();
     els.resultsTitle.textContent = name;
-    closeNewProjectModal();
     setTab("editor");
     await refreshProjects();
   } else {
@@ -1137,7 +1169,6 @@ async function run(): Promise<void> {
     state.activeProject = null;
     state.manifestMeta = null;
     renderSavedIndicator();
-    closeNewProjectModal();
     await refreshProjects();
   }
   if (state.cancelRequested) {
