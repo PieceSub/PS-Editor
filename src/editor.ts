@@ -127,10 +127,12 @@ export function renderEditor(
   const wrap = el("div", "editor-wrap");
   const stage = el("div", "editor-stage");
 
-  const translated = page.outputs.translated;
+  // Metin katmanları için temizlenmiş (metinsiz) arka plan kullanılır;
+  // çeviriler draggable HTML katmanları olarak görselin üstünde durur.
+  const baseImage = page.outputs.cleaned || page.outputs.translated;
   const img = el("img");
-  img.src = pageImageUrl(translated, ver);
-  img.alt = "Çevrilmiş sayfa (düzenleme)";
+  img.src = pageImageUrl(baseImage, ver);
+  img.alt = "Sayfa arka planı (düzenleme)";
   img.draggable = false;
   stage.appendChild(img);
 
@@ -160,6 +162,7 @@ export function renderEditor(
   let applying = false;
   let applyError: string | null = null;
   let moveOffset: { dx: number; dy: number } | null = null;
+  let textDrag: { regionId: number; dx: number; dy: number } | null = null;
   let drawStart: { x: number; y: number } | null = null;
 
   const stageBox = (): DOMRect => stage.getBoundingClientRect();
@@ -172,7 +175,43 @@ export function renderEditor(
   const pct = (v: number, total: number): string => `${(v / Math.max(1, total)) * 100}%`;
   const scaleX = (): number => stageBox().width / Math.max(1, imgW);
 
-  /* ------------------------------------------------------- kuş gözü kutular */
+  /* ------------------------------------------------------- metin katmanı stili */
+
+  /** Bir bölgenin metin katmanı için CSS stillerini hesaplar. */
+  function applyTextStyle(
+    node: HTMLElement,
+    region: Region,
+    overrideStyle?: RegionStyle,
+    overrideText?: string,
+  ): void {
+    const style = overrideStyle ?? regionStyle(region);
+    const text = overrideText ?? region.translation;
+    const bbox = region.bbox;
+    const size =
+      style.font_size_override ??
+      region.font_size ??
+      estimateFontSize(bbox);
+    node.style.fontSize = `${Math.round(size * scaleX())}px`;
+    node.style.fontWeight = style.font_weight === "bold" ? "700" : "400";
+    node.style.textAlign = style.align;
+    node.style.lineHeight = "1.15";
+    node.style.whiteSpace = "pre-wrap";
+    node.style.wordBreak = "break-word";
+    node.style.textWrap = "balance";
+    const color = style.color;
+    if (color) {
+      node.style.color = color;
+      node.style.textShadow = `0 0 ${Math.max(2, Math.round(size * 0.1))}px ${
+        luma(color) >= 140 ? "#000" : "#fff"
+      }`;
+    } else {
+      node.style.color = "#000";
+      node.style.textShadow = "0 0 2px #fff, 0 0 2px #fff";
+    }
+    node.textContent = text;
+  }
+
+  /* ------------------------------------------------------- kuş gözü kutular + metin katmanları */
 
   function renderOverlay(): void {
     overlay.replaceChildren();
@@ -182,6 +221,10 @@ export function renderEditor(
       // Seçili bölge henüz uygulanmamış olsa da taşınan taslak konumunda görünür.
       const displayedBbox = selected && draft && r.id === selected.id ? draft.bbox : r.bbox;
       const [x1, y1, x2, y2] = displayedBbox;
+      const boxW = Math.max(0, x2 - x1);
+      const boxH = Math.max(0, y2 - y1);
+
+      // Bölge kutusu (sınır çizgisi)
       const box = el("div", "reg-box");
       if (r.disabled) box.classList.add("disabled");
       if (r.manual) box.classList.add("manual");
@@ -192,8 +235,8 @@ export function renderEditor(
       }
       box.style.left = pct(x1, imgW);
       box.style.top = pct(y1, imgH);
-      box.style.width = pct(Math.max(0, x2 - x1), imgW);
-      box.style.height = pct(Math.max(0, y2 - y1), imgH);
+      box.style.width = pct(boxW, imgW);
+      box.style.height = pct(boxH, imgH);
       box.dataset.rid = String(r.id);
       box.title = `${r.label_name || "Bölge"}${r.manual ? " (elle)" : ""}${r.disabled ? " — kapalı" : ""}`;
       box.tabIndex = 0;
@@ -208,33 +251,52 @@ export function renderEditor(
         ev.preventDefault();
         api.onSelect(r.id);
       });
+      overlay.appendChild(box);
 
-      // Seçili bölgede canlı önizleme
-      if (selected && r.id === selected.id && draft) {
-        if (draft.translation.trim()) {
-          const prev = el("div", "reg-preview");
-          prev.textContent = draft.translation;
-          const size =
-            draft.style.font_size_override ??
-            selected.font_size ??
-            estimateFontSize(draft.bbox);
-          prev.style.fontSize = `${Math.round(size * scaleX())}px`;
-          prev.style.fontWeight = draft.style.font_weight === "bold" ? "700" : "400";
-          prev.style.textAlign = draft.style.align;
-          const color = draft.style.color;
-          if (color) {
-            prev.style.color = color;
-            prev.style.textShadow = `0 0 ${Math.max(2, Math.round(size * 0.1))}px ${
-              luma(color) >= 140 ? "#000" : "#fff"
-            }`;
+      // Metin katmanı (Photoshop benzeri draggable text layer)
+      if (!r.disabled || (selected && r.id === selected.id && draft && !draft.disabled)) {
+        const displayText =
+          selected && r.id === selected.id && draft ? draft.translation : r.translation;
+        if (displayText.trim()) {
+          const textLayer = el("div", "text-layer");
+          if (selected && r.id === selected.id) textLayer.classList.add("active");
+          if (r.disabled) textLayer.classList.add("disabled");
+          textLayer.style.left = pct(x1, imgW);
+          textLayer.style.top = pct(y1, imgH);
+          textLayer.style.width = pct(boxW, imgW);
+          textLayer.style.height = pct(boxH, imgH);
+          textLayer.dataset.rid = String(r.id);
+
+          if (selected && r.id === selected.id && draft) {
+            applyTextStyle(textLayer, r, draft.style, draft.translation);
           } else {
-            prev.style.color = "#000";
-            prev.style.textShadow = `0 0 2px #fff, 0 0 2px #fff`;
+            applyTextStyle(textLayer, r);
           }
-          box.appendChild(prev);
+
+          // Metin katmanını sürükleme — pointer capture stage üzerinde olduğu
+          // için sürükleme olayları stage handler'ları tarafından işlenir.
+          textLayer.addEventListener("pointerdown", (ev) => {
+            if (applying) return;
+            ev.stopPropagation();
+            // Önce bu bölgeyi seç
+            if (r.id !== selectedId) {
+              api.onSelect(r.id);
+              return;
+            }
+            // Taşıma başlar — stage pointermove handler'ı textDrag ile devam eder
+            const b = stageBox();
+            textDrag = {
+              regionId: r.id,
+              dx: ev.clientX - b.left - (x1 / imgW) * b.width,
+              dy: ev.clientY - b.top - (y1 / imgH) * b.height,
+            };
+            stage.setPointerCapture(ev.pointerId);
+            ev.preventDefault();
+          });
+
+          overlay.appendChild(textLayer);
         }
       }
-      overlay.appendChild(box);
     }
 
     // Sürüklenen çizim dikdörtgeni
@@ -294,6 +356,36 @@ export function renderEditor(
   });
 
   stage.addEventListener("pointermove", (ev) => {
+    if (textDrag && draft && textDrag.regionId === draft.id) {
+      // Metin katmanı sürüklüyor — draft bbox'ını güncelle ama renderOverlay çağırma
+      // (pointer capture nedeniyle DOM elementi yeniden oluşturulursa olaylar kaybolur).
+      const b = stageBox();
+      const x = ((ev.clientX - b.left - textDrag.dx) / b.width) * imgW;
+      const y = ((ev.clientY - b.top - textDrag.dy) / b.height) * imgH;
+      const w = draft.bbox[2] - draft.bbox[0];
+      const h = draft.bbox[3] - draft.bbox[1];
+      draft.bbox = [
+        Math.round(clamp(x, 0, imgW - w)),
+        Math.round(clamp(y, 0, imgH - h)),
+        Math.round(clamp(x + w, 0, imgW)),
+        Math.round(clamp(y + h, 0, imgH)),
+      ];
+      dirty = true;
+      applyError = null;
+      // Metin katmanının CSS konumunu doğrudan güncelle (yeniden render olmadan)
+      const tl = overlay.querySelector<HTMLElement>(`.text-layer[data-rid="${draft.id}"]`);
+      if (tl) {
+        tl.style.left = pct(draft.bbox[0], imgW);
+        tl.style.top = pct(draft.bbox[1], imgH);
+      }
+      const rb = overlay.querySelector<HTMLElement>(`.reg-box[data-rid="${draft.id}"]`);
+      if (rb) {
+        rb.style.left = pct(draft.bbox[0], imgW);
+        rb.style.top = pct(draft.bbox[1], imgH);
+      }
+      syncPanelState();
+      return;
+    }
     if (moveOffset && draft) {
       const b = stageBox();
       const x = (ev.clientX - b.left - moveOffset.dx) / b.width * imgW;
@@ -327,6 +419,13 @@ export function renderEditor(
   });
 
   const finishPointer = (ev: PointerEvent): void => {
+    if (textDrag) {
+      // Metin katmanı sürükleme bitti — konum değişikliklerini renderla
+      textDrag = null;
+      renderOverlay();
+      syncPanelState();
+      return;
+    }
     if (drawStart) {
       const [x, y] = toImg(ev.clientX, ev.clientY);
       const x1 = Math.round(Math.min(drawStart.x, x));
@@ -350,6 +449,7 @@ export function renderEditor(
 
   stage.addEventListener("pointerup", finishPointer);
   stage.addEventListener("pointercancel", () => {
+    textDrag = null;
     drawStart = null;
     moveOffset = null;
     renderOverlay();
@@ -779,6 +879,7 @@ export function renderEditor(
   function onKey(ev: KeyboardEvent): void {
     if (ev.key === "Escape" && selected && draft) {
       ev.stopPropagation();
+      textDrag = null;
       draft.bbox = [...selected.bbox];
       draft.translation = selected.translation || "";
       draft.style = regionStyle(selected);
