@@ -888,11 +888,11 @@ select:hover:not(:disabled),
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--canvas);
+  box-sizing: border-box;
 }
 
 .editor-stage {
   position: relative;
-  width: 100%;
   cursor: crosshair;
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -900,7 +900,7 @@ select:hover:not(:disabled),
   background: var(--card-2);
   min-height: 120px;
   box-shadow: 0 14px 42px rgba(0, 0, 0, 0.42);
-  max-width: 100%;
+  margin: 0 auto;
 }
 
 .editor-stage img {
@@ -908,7 +908,7 @@ select:hover:not(:disabled),
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: fill;
+  object-fit: contain;
   user-select: none;
   -webkit-user-drag: none;
 }
@@ -1148,7 +1148,65 @@ select:hover:not(:disabled),
   opacity: 0.5;
 }
 
+.split-edit-grid {
+  display: flex;
+  gap: 14px;
+  align-items: start;
+  width: 100%;
+}
+
+.split-orig {
+  flex: 0 0 auto;
+  position: relative;
+  max-width: 40%;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.split-orig-stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--card-2);
+}
+
+.split-orig-stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+.split-orig figcaption {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.split-editor-right {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 @media (max-width: 860px) {
+  .split-edit-grid {
+    flex-direction: column;
+  }
+
+  .split-orig {
+    max-width: 100%;
+  }
+
   .editor-wrap {
     grid-template-columns: 1fr;
   }

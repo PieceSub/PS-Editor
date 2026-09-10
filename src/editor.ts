@@ -1,4 +1,4 @@
-/** Bölge editörü (adım 7): otomatik sonucun elle düzeltilebildiği katman.
+/** Bölge editörü: otomatik sonucun elle düzeltilebildiği katman.
 
  * UX deseni kaynağı: BallonsTranslator (github.com/dmMaze/BallonsTranslator
  * README_EN.md) — "metin düzenleme modu + sahnede blok seçimi + yeni bloğu
@@ -121,6 +121,7 @@ export function renderEditor(
   selectedId: number | null,
   ver: number,
   api: EditorApi,
+  target?: HTMLElement,
 ): void {
   disposeEditor();
   container.replaceChildren();
@@ -853,7 +854,7 @@ export function renderEditor(
   const panel = el("div", "editor-panel-host");
   panel.appendChild(buildControlPanel());
   wrap.append(stage, panel);
-  container.appendChild(wrap);
+  (target ?? container).appendChild(wrap);
   syncPanelState(true);
   renderOverlay();
 
@@ -862,8 +863,9 @@ export function renderEditor(
     .then(() => {
       imgW = img.naturalWidth || 1;
       imgH = img.naturalHeight || 1;
-      const maxW = Math.max(200, container.clientWidth);
       const maxH = Math.max(320, window.innerHeight - 420);
+      const maxW = Math.max(200, (target ?? container).clientWidth - 340);
+
       let w = maxW;
       let h = (w * imgH) / imgW;
       if (h > maxH) {

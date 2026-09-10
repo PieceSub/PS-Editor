@@ -1243,7 +1243,51 @@ function renderSelected(): void {
   const r = item.result;
 
   if (state.editMode) {
-    renderEditor(els.viewer, r, state.selectedRegionId, item.imgVer, editorApi());
+    if (state.viewMode === "side") {
+      disposeEditor();
+      const grid = document.createElement("div");
+      grid.className = "split-edit-grid";
+
+      const origPanel = document.createElement("figure");
+      origPanel.className = "side-panel split-orig";
+      const origImg = document.createElement("img");
+      origImg.src = pageImageUrl(r.image, item.imgVer);
+      origImg.alt = "Orijinal sayfa";
+      origImg.draggable = false;
+      origImg.style.pointerEvents = "none";
+      origPanel.appendChild(origImg);
+      const cap = document.createElement("figcaption");
+      cap.textContent = "Orijinal";
+      origPanel.appendChild(cap);
+
+      const rightPanel = document.createElement("div");
+      rightPanel.className = "split-editor-right";
+
+      const origStage = document.createElement("div");
+      origStage.className = "split-orig-stage";
+      origStage.appendChild(origImg);
+      origStage.appendChild(cap);
+      origPanel.replaceChildren(origStage, cap);
+
+      renderEditor(rightPanel, r, state.selectedRegionId, item.imgVer, editorApi(), rightPanel);
+
+      grid.append(origPanel, rightPanel);
+      els.viewer.replaceChildren(grid);
+
+      const syncOrigSize = () => {
+        const stageEl = rightPanel.querySelector(".editor-stage") as HTMLElement | null;
+        if (stageEl) {
+          origStage.style.width = stageEl.style.width;
+          origStage.style.height = stageEl.style.height;
+        }
+      };
+      void origImg.decode().then(() => {
+        syncOrigSize();
+        new ResizeObserver(syncOrigSize).observe(rightPanel);
+      }).catch(() => undefined);
+    } else {
+      renderEditor(els.viewer, r, state.selectedRegionId, item.imgVer, editorApi());
+    }
   } else {
     disposeEditor();
     renderViewer(els.viewer, r, {
@@ -1349,13 +1393,12 @@ function syncEditControls(): void {
   els.btnOverflow.disabled = state.editMode;
   els.btnOverflow.setAttribute("aria-disabled", String(state.editMode));
 
-  els.viewModeGroup.setAttribute("aria-disabled", String(state.editMode));
+  els.viewModeGroup.removeAttribute("aria-disabled");
   for (const btn of els.viewModeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
     const active = btn.dataset.view === state.viewMode;
     btn.classList.toggle("active", active);
     btn.setAttribute("aria-checked", String(active));
     btn.tabIndex = active ? 0 : -1;
-    btn.disabled = state.editMode;
   }
 }
 
@@ -1980,7 +2023,7 @@ async function initEvents(): Promise<void> {
   for (const btn of els.viewModeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
     btn.addEventListener("click", () => {
       const view = btn.dataset.view as ViewMode | undefined;
-      if (!view || state.editMode) return;
+      if (!view) return;
       state.viewMode = view;
       for (const b of els.viewModeGroup.querySelectorAll<HTMLButtonElement>("button.seg")) {
         const active = b.dataset.view === view;
